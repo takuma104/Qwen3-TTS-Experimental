@@ -37,7 +37,7 @@ UpSamplerBlock
 
 | ファイル | 説明 |
 |----------|------|
-| `finetuning/tokenizer48k/train_upsampler.py` | 学習スクリプト（JSONL/WebDataset対応） |
+| `finetuning/tokenizer48k/train_upsampler.py` | 学習スクリプト（WebDataset対応） |
 | `finetuning/tokenizer48k/upsampler_dataset.py` | 学習用データセットクラス |
 | `finetuning/tokenizer48k/upsampler_losses.py` | 損失関数（L1 + Multi-resolution STFT + Mel + RMS） |
 | `finetuning/tokenizer48k/merge_upsampler.py` | 学習済みアップサンプラーをマージするユーティリティ |
@@ -170,23 +170,7 @@ All tests passed!
 
 ## アップサンプラー学習
 
-### データ形式
-
-#### JSONL形式
-
-JSONLファイルで、各行は以下の形式:
-
-```json
-{
-  "audio": "path/to/audio.wav",
-  "audio_codes": [[c0, c1, ..., c15], [c0, c1, ..., c15], ...]
-}
-```
-
-- `audio`: 元の音声ファイルパス（任意のサンプルレート、48kHzにリサンプリングされる）
-- `audio_codes`: エンコード済みの音声コード (shape: [seq_len, 16])
-
-#### WebDataset形式
+### データ形式（WebDataset）
 
 `dataset/parquet_to_webdataset.py` で Parquet から変換した tar アーカイブ形式。
 大規模データセットに推奨。
@@ -206,30 +190,6 @@ python dataset/parquet_to_webdataset.py \
 ```
 
 ### 学習の実行
-
-#### JSONL形式を使う場合
-
-```bash
-# 単一GPU
-python finetuning/tokenizer48k/train_upsampler.py \
-    --train_jsonl data/train.jsonl \
-    --val_jsonl data/val.jsonl \
-    --output_dir output/upsampler \
-    --batch_size 8 \
-    --lr 1e-4 \
-    --num_epochs 100
-
-# マルチGPU (accelerate)
-accelerate launch finetuning/tokenizer48k/train_upsampler.py \
-    --train_jsonl data/train.jsonl \
-    --val_jsonl data/val.jsonl \
-    --output_dir output/upsampler \
-    --batch_size 8 \
-    --lr 1e-4 \
-    --num_epochs 100
-```
-
-#### WebDataset形式を使う場合（大規模データ推奨）
 
 ```bash
 # 単一GPU
@@ -279,7 +239,7 @@ accelerate launch finetuning/tokenizer48k/train_upsampler.py \
 ```bash
 # WandB設定を指定して学習
 python finetuning/tokenizer48k/train_upsampler.py \
-    --train_jsonl data/train.jsonl \
+    --train_shards "data/train-{000000..000100}.tar" \
     --wandb_project my-upsampler-project \
     --wandb_run_name experiment-1 \
     --wandb_entity my-team

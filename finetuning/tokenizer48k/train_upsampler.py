@@ -5,12 +5,6 @@
 48kHz Upsampler 学習スクリプト
 
 Usage:
-    # JSONL形式（単一GPU）
-    python finetuning/tokenizer48k/train_upsampler.py \
-        --train_jsonl data/train.jsonl \
-        --val_jsonl data/val.jsonl \
-        --output_dir output/upsampler
-
     # WebDataset形式（単一GPU）
     python finetuning/tokenizer48k/train_upsampler.py \
         --train_shards "data/train-{000000..000010}.tar" \
@@ -44,12 +38,7 @@ from tqdm import tqdm
 # プロジェクトルートをパスに追加
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from finetuning.tokenizer48k.upsampler_dataset import (
-    UpsamplerDataset,
-    collate_fn,
-    load_data_from_jsonl,
-    create_webdataset_loader,
-)
+from finetuning.tokenizer48k.upsampler_dataset import create_webdataset_loader
 from finetuning.tokenizer48k.upsampler_losses import UpsamplerLoss
 from qwen_tts.core.tokenizer_48k.configuration import Qwen3TTSTokenizer48kDecoderConfig
 from qwen_tts.core.tokenizer_48k.modeling import Qwen3TTSTokenizer48kDecoder
@@ -60,12 +49,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train 48kHz Upsampler")
 
     # データ
-    parser.add_argument("--train_jsonl", type=str, default=None, help="訓練データのJSONLファイル")
-    parser.add_argument("--val_jsonl", type=str, default=None, help="検証データのJSONLファイル")
-    parser.add_argument("--train_shards", type=str, default=None, help="訓練データのWebDatasetシャードパターン")
+    parser.add_argument("--train_shards", type=str, required=True, help="訓練データのWebDatasetシャードパターン")
     parser.add_argument("--val_shards", type=str, default=None, help="検証データのWebDatasetシャードパターン")
-    parser.add_argument("--dataset_type", type=str, default="auto", choices=["auto", "jsonl", "webdataset"],
-                        help="データセットタイプ（auto: 自動判定）")
 
     # モデル
     parser.add_argument(
@@ -337,22 +322,37 @@ def main():
         rms_weight=args.rms_weight,
     )
 
-    # データセットタイプを判定
-    dataset_type = args.dataset_type
-    if dataset_type == "auto":
-        if args.train_shards:
-            dataset_type = "webdataset"
-        elif args.train_jsonl:
-            dataset_type = "jsonl"
-        else:
-            raise ValueError("Either --train_jsonl or --train_shards must be specified")
+    # データセット作成（WebDataset）
+    accelerator.print(f"Loading training data from WebDataset: {args.train_shards}...")
 
-    # データセット作成
-    if dataset_type == "webdataset":
-        accelerator.print(f"Loading training data from WebDataset: {args.train_shards}...")
+    # glob パターンの場合は展開
+    path = args.train_shards
+    if "*" in path and "{" not in path:
+        expanded_files = sorted(glob.glob(path))
+        if not expanded_files:
+            print(f"Error: No files found matching pattern: {path}")
+            sys.exit(1)
+        print(f"Found {len(expanded_files)} tar files")
+        # リストを WebDataset 形式に変換
+        shard_pattern = expanded_files
+    else:
+        shard_pattern = path
 
-        # glob パターンの場合は展開
-        path = args.train_shards
+    train_dataloader = create_webdataset_loader(
+        shard_pattern=shard_pattern,
+        target_sample_rate=48000,
+        max_audio_length=args.max_audio_length,
+        min_audio_length=args.min_audio_length,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        shuffle_buffer=1000,
+    )
+    accelerator.print("Training dataloader created (WebDataset)")
+
+    # 検証データ（オプション）
+    val_dataloader = None
+    if args.val_shards:
+        path = args.val_shards
         if "*" in path and "{" not in path:
             expanded_files = sorted(glob.glob(path))
             if not expanded_files:
@@ -364,85 +364,17 @@ def main():
         else:
             shard_pattern = path
 
-        train_dataloader = create_webdataset_loader(
+        accelerator.print(f"Loading validation data from WebDataset: {args.val_shards}...")
+        val_dataloader = create_webdataset_loader(
             shard_pattern=shard_pattern,
             target_sample_rate=48000,
             max_audio_length=args.max_audio_length,
             min_audio_length=args.min_audio_length,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
-            shuffle_buffer=1000,
+            shuffle_buffer=0,  # 検証データはシャッフル不要
         )
-        accelerator.print("Training dataloader created (WebDataset)")
-
-        # 検証データ（オプション）
-        val_dataloader = None
-        if args.val_shards:
-            path = args.val_shards
-            if "*" in path and "{" not in path:
-                expanded_files = sorted(glob.glob(path))
-                if not expanded_files:
-                    print(f"Error: No files found matching pattern: {path}")
-                    sys.exit(1)
-                print(f"Found {len(expanded_files)} tar files")
-                # リストを WebDataset 形式に変換
-                shard_pattern = expanded_files
-            else:
-                shard_pattern = path
-
-            accelerator.print(f"Loading validation data from WebDataset: {args.val_shards}...")
-            val_dataloader = create_webdataset_loader(
-                shard_pattern=shard_pattern,
-                target_sample_rate=48000,
-                max_audio_length=args.max_audio_length,
-                min_audio_length=args.min_audio_length,
-                batch_size=args.batch_size,
-                num_workers=args.num_workers,
-                shuffle_buffer=0,  # 検証データはシャッフル不要
-            )
-            accelerator.print("Validation dataloader created (WebDataset)")
-
-    else:  # jsonl
-        accelerator.print(f"Loading training data from {args.train_jsonl}...")
-        train_data = load_data_from_jsonl(args.train_jsonl)
-        train_dataset = UpsamplerDataset(
-            train_data,
-            target_sample_rate=48000,
-            max_audio_length=args.max_audio_length,
-            min_audio_length=args.min_audio_length,
-        )
-        accelerator.print(f"Training samples: {len(train_dataset)}")
-
-        train_dataloader = DataLoader(
-            train_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            collate_fn=collate_fn,
-            num_workers=args.num_workers,
-            pin_memory=True,
-        )
-
-        # 検証データ（オプション）
-        val_dataloader = None
-        if args.val_jsonl:
-            accelerator.print(f"Loading validation data from {args.val_jsonl}...")
-            val_data = load_data_from_jsonl(args.val_jsonl)
-            val_dataset = UpsamplerDataset(
-                val_data,
-                target_sample_rate=48000,
-                max_audio_length=args.max_audio_length,
-                min_audio_length=args.min_audio_length,
-            )
-            accelerator.print(f"Validation samples: {len(val_dataset)}")
-
-            val_dataloader = DataLoader(
-                val_dataset,
-                batch_size=args.batch_size,
-                shuffle=False,
-                collate_fn=collate_fn,
-                num_workers=args.num_workers,
-                pin_memory=True,
-            )
+        accelerator.print("Validation dataloader created (WebDataset)")
 
     # オプティマイザ
     optimizer = AdamW(

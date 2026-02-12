@@ -9,126 +9,11 @@
 - audio: 元の音声ファイルパス（48kHzまたはリサンプリング対象）
 """
 
-import json
-from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import List
 
 import librosa
 import numpy as np
 import torch
-from torch.utils.data import Dataset
-
-
-class UpsamplerDataset(Dataset):
-    """
-    48kHz アップサンプラー学習用データセット
-
-    Args:
-        data_list: データのリスト。各要素は以下の形式:
-            {
-                "audio": "path/to/audio.wav",
-                "audio_codes": [[...], [...], ...]  # shape: (seq_len, 16)
-            }
-        target_sample_rate: ターゲットのサンプルレート（デフォルト: 48000）
-        max_audio_length: 最大オーディオ長（秒）。これより長い場合はランダムにクロップ
-        min_audio_length: 最小オーディオ長（秒）。これより短い場合はスキップ
-    """
-
-    def __init__(
-        self,
-        data_list: List[dict],
-        target_sample_rate: int = 48000,
-        max_audio_length: float = 10.0,
-        min_audio_length: float = 1.0,
-    ):
-        self.data_list = data_list
-        self.target_sample_rate = target_sample_rate
-        self.max_audio_length = max_audio_length
-        self.min_audio_length = min_audio_length
-
-        # フィルタリング
-        self.filtered_data = self._filter_data()
-
-    def _filter_data(self) -> List[dict]:
-        """短すぎるデータをフィルタリング"""
-        filtered = []
-        for item in self.data_list:
-            audio_codes = item.get("audio_codes", [])
-            # 12Hz * min_audio_length = 最小コード長
-            min_codes = int(12 * self.min_audio_length)
-            if len(audio_codes) >= min_codes:
-                filtered.append(item)
-        return filtered
-
-    def __len__(self) -> int:
-        return len(self.filtered_data)
-
-    def _load_audio(self, path: str) -> Tuple[np.ndarray, int]:
-        """オーディオファイルを読み込み"""
-        audio, sr = librosa.load(path, sr=None, mono=True)
-        if audio.ndim > 1:
-            audio = np.mean(audio, axis=-1)
-        return audio.astype(np.float32), int(sr)
-
-    def _resample_to_target(self, audio: np.ndarray, sr: int) -> np.ndarray:
-        """ターゲットサンプルレートにリサンプリング"""
-        if sr != self.target_sample_rate:
-            audio = librosa.resample(
-                audio, orig_sr=sr, target_sr=self.target_sample_rate
-            )
-        return audio
-
-    def _resample_to_24k(self, audio: np.ndarray, sr: int) -> np.ndarray:
-        """24kHzにリサンプリング（デコーダー出力との比較用）"""
-        if sr != 24000:
-            audio = librosa.resample(audio, orig_sr=sr, target_sr=24000)
-        return audio
-
-    def __getitem__(self, idx: int) -> dict:
-        item = self.filtered_data[idx]
-
-        audio_path = item["audio"]
-        audio_codes = item["audio_codes"]
-
-        # オーディオ読み込み
-        audio, sr = self._load_audio(audio_path)
-
-        # audio_codes を tensor に変換
-        audio_codes = torch.tensor(audio_codes, dtype=torch.long)
-        num_codes = audio_codes.shape[0]
-
-        # 最大長でクロップ（必要な場合）
-        max_codes = int(12 * self.max_audio_length)
-        if num_codes > max_codes:
-            # ランダムな開始位置を選択
-            start_code = torch.randint(0, num_codes - max_codes, (1,)).item()
-            end_code = start_code + max_codes
-
-            audio_codes = audio_codes[start_code:end_code]
-            num_codes = max_codes
-
-            # オーディオも対応する範囲でクロップ
-            # 1コード = 1/12秒 = sr/12 サンプル
-            samples_per_code = sr / 12
-            start_sample = int(start_code * samples_per_code)
-            end_sample = int(end_code * samples_per_code)
-            audio = audio[start_sample:end_sample]
-
-        # ターゲット（48kHz）にリサンプリング
-        audio_48k = self._resample_to_target(audio, sr)
-
-        # 24kHzにもリサンプリング（参照用）
-        audio_24k = self._resample_to_24k(audio, sr)
-
-        # tensor に変換
-        audio_48k = torch.from_numpy(audio_48k).float()
-        audio_24k = torch.from_numpy(audio_24k).float()
-
-        return {
-            "audio_codes": audio_codes,  # (seq_len, 16)
-            "audio_48k": audio_48k,      # (samples_48k,)
-            "audio_24k": audio_24k,      # (samples_24k,)
-        }
 
 
 def collate_fn(batch: List[dict]) -> dict:
@@ -173,16 +58,6 @@ def collate_fn(batch: List[dict]) -> dict:
         "audio_48k_lengths": audio_48k_lengths,  # (batch,)
         "audio_24k_lengths": audio_24k_lengths,  # (batch,)
     }
-
-
-def load_data_from_jsonl(jsonl_path: str) -> List[dict]:
-    """JSONLファイルからデータを読み込む"""
-    data = []
-    with open(jsonl_path, "r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                data.append(json.loads(line))
-    return data
 
 
 def create_webdataset_loader(
@@ -305,49 +180,33 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python upsampler_dataset.py <jsonl_path_or_webdataset_pattern>")
+        print("Usage: python upsampler_dataset.py <webdataset_pattern>")
         sys.exit(1)
 
     path = sys.argv[1]
 
-    # WebDataset 形式かどうか判定
-    if path.endswith(".tar") or "{" in path or "*" in path:
-        print("Testing WebDataset loader...")
+    print("Testing WebDataset loader...")
 
-        # glob パターンの場合は展開
-        if "*" in path and "{" not in path:
-            expanded_files = sorted(glob.glob(path))
-            if not expanded_files:
-                print(f"Error: No files found matching pattern: {path}")
-                sys.exit(1)
-            print(f"Found {len(expanded_files)} tar files")
-            # リストを WebDataset 形式に変換
-            shard_pattern = expanded_files
-        else:
-            shard_pattern = path
-
-        loader = create_webdataset_loader(
-            shard_pattern=shard_pattern,
-            batch_size=8,
-            num_workers=0,
-        )
-        for i, batch in enumerate(loader):
-            print(f"Batch {i}:")
-            print(f"  audio_codes: {batch['audio_codes'].shape}")
-            print(f"  audio_48k: {batch['audio_48k'].shape}")
-            print(f"  audio_24k: {batch['audio_24k'].shape}")
-            if i >= 2:
-                break
+    # glob パターンの場合は展開
+    if "*" in path and "{" not in path:
+        expanded_files = sorted(glob.glob(path))
+        if not expanded_files:
+            print(f"Error: No files found matching pattern: {path}")
+            sys.exit(1)
+        print(f"Found {len(expanded_files)} tar files")
+        shard_pattern = expanded_files
     else:
-        print("Testing JSONL dataset...")
-        data = load_data_from_jsonl(path)
-        print(f"Loaded {len(data)} samples")
+        shard_pattern = path
 
-        dataset = UpsamplerDataset(data)
-        print(f"Filtered to {len(dataset)} samples")
-
-        if len(dataset) > 0:
-            sample = dataset[0]
-            print(f"Sample audio_codes shape: {sample['audio_codes'].shape}")
-            print(f"Sample audio_48k shape: {sample['audio_48k'].shape}")
-            print(f"Sample audio_24k shape: {sample['audio_24k'].shape}")
+    loader = create_webdataset_loader(
+        shard_pattern=shard_pattern,
+        batch_size=8,
+        num_workers=0,
+    )
+    for i, batch in enumerate(loader):
+        print(f"Batch {i}:")
+        print(f"  audio_codes: {batch['audio_codes'].shape}")
+        print(f"  audio_48k: {batch['audio_48k'].shape}")
+        print(f"  audio_24k: {batch['audio_24k'].shape}")
+        if i >= 2:
+            break
