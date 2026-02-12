@@ -2,10 +2,10 @@
 # Copyright 2026 The Alibaba Qwen team & Takuma Mori.
 # SPDX-License-Identifier: Apache-2.0
 """
-48kHz Upsampler 学習スクリプト
+48kHz Upsampler Training Script
 
 Usage:
-    # WebDataset形式（単一GPU）
+    # WebDataset format (single GPU)
     python finetuning/tokenizer48k/train_upsampler.py \
         --train_shards "data/train-{000000..000010}.tar" \
         --val_shards "data/val-{000000..000002}.tar" \
@@ -35,7 +35,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# プロジェクトルートをパスに追加
+# Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from finetuning.tokenizer48k.upsampler_dataset import create_webdataset_loader
@@ -48,68 +48,68 @@ from qwen_tts import Qwen3TTSTokenizer
 def parse_args():
     parser = argparse.ArgumentParser(description="Train 48kHz Upsampler")
 
-    # データ
-    parser.add_argument("--train_shards", type=str, required=True, help="訓練データのWebDatasetシャードパターン")
-    parser.add_argument("--val_shards", type=str, default=None, help="検証データのWebDatasetシャードパターン")
+    # Data
+    parser.add_argument("--train_shards", type=str, required=True, help="WebDataset shard pattern for training data")
+    parser.add_argument("--val_shards", type=str, default=None, help="WebDataset shard pattern for validation data")
 
-    # モデル
+    # Model
     parser.add_argument(
         "--decoder_model_path",
         type=str,
         default="Qwen/Qwen3-TTS-Tokenizer-12Hz",
-        help="ベースとなる24kHzデコーダーモデルのパス",
+        help="Base 24kHz decoder model path",
     )
-    parser.add_argument("--upsampler_hidden_dim", type=int, default=32, help="アップサンプラーの隠れ層次元")
-    parser.add_argument("--upsampler_kernel_size", type=int, default=4, help="アップサンプラーのカーネルサイズ")
+    parser.add_argument("--upsampler_hidden_dim", type=int, default=32, help="Upsampler hidden dimension")
+    parser.add_argument("--upsampler_kernel_size", type=int, default=4, help="Upsampler kernel size")
 
-    # 学習設定
-    parser.add_argument("--batch_size", type=int, default=8, help="バッチサイズ")
-    parser.add_argument("--lr", type=float, default=1e-4, help="学習率")
+    # Training settings
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
-    parser.add_argument("--num_epochs", type=int, default=100, help="エポック数")
-    parser.add_argument("--warmup_steps", type=int, default=1000, help="ウォームアップステップ数")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=4, help="勾配累積ステップ数")
-    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="勾配クリッピングの最大ノルム")
+    parser.add_argument("--num_epochs", type=int, default=100, help="Number of epochs")
+    parser.add_argument("--warmup_steps", type=int, default=1000, help="Warmup steps")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=4, help="Gradient accumulation steps")
+    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Maximum gradient norm for clipping")
 
-    # 損失関数の重み
-    parser.add_argument("--l1_weight", type=float, default=1.0, help="L1損失の重み")
-    parser.add_argument("--stft_weight", type=float, default=1.0, help="STFT損失の重み")
-    parser.add_argument("--mel_weight", type=float, default=1.0, help="メル損失の重み")
-    parser.add_argument("--rms_weight", type=float, default=1.0, help="RMS損失の重み")
+    # Loss function weights
+    parser.add_argument("--l1_weight", type=float, default=1.0, help="L1 loss weight")
+    parser.add_argument("--stft_weight", type=float, default=1.0, help="STFT loss weight")
+    parser.add_argument("--mel_weight", type=float, default=1.0, help="Mel loss weight")
+    parser.add_argument("--rms_weight", type=float, default=1.0, help="RMS loss weight")
 
-    # データ設定
-    parser.add_argument("--max_audio_length", type=float, default=10.0, help="最大オーディオ長（秒）")
-    parser.add_argument("--min_audio_length", type=float, default=1.0, help="最小オーディオ長（秒）")
-    parser.add_argument("--num_workers", type=int, default=0, help="DataLoaderのワーカー数")
+    # Data settings
+    parser.add_argument("--max_audio_length", type=float, default=10.0, help="Maximum audio length (seconds)")
+    parser.add_argument("--min_audio_length", type=float, default=1.0, help="Minimum audio length (seconds)")
+    parser.add_argument("--num_workers", type=int, default=0, help="Number of DataLoader workers")
 
-    # 出力
-    parser.add_argument("--output_dir", type=str, default="output/upsampler", help="出力ディレクトリ")
-    parser.add_argument("--save_every", type=int, default=1000, help="チェックポイント保存間隔（ステップ）")
-    parser.add_argument("--eval_every", type=int, default=500, help="評価間隔（ステップ）")
-    parser.add_argument("--log_every", type=int, default=10, help="ログ出力間隔（ステップ）")
+    # Output
+    parser.add_argument("--output_dir", type=str, default="output/upsampler", help="Output directory")
+    parser.add_argument("--save_every", type=int, default=1000, help="Checkpoint save interval (steps)")
+    parser.add_argument("--eval_every", type=int, default=500, help="Evaluation interval (steps)")
+    parser.add_argument("--log_every", type=int, default=10, help="Log output interval (steps)")
 
-    # ログ設定
-    parser.add_argument("--log_with", type=str, default="wandb", help="ログ出力方法（例: wandb）")
+    # Logging settings
+    parser.add_argument("--log_with", type=str, default="wandb", help="Logging method (e.g., wandb)")
 
-    # WandB設定
-    parser.add_argument("--wandb_project", type=str, default="qwen3-tts-upsampler", help="WandBプロジェクト名")
-    parser.add_argument("--wandb_run_name", type=str, default=None, help="WandB run名（デフォルト: 自動生成）")
-    parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity（組織/ユーザー名）")
+    # WandB settings
+    parser.add_argument("--wandb_project", type=str, default="qwen3-tts-upsampler", help="WandB project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None, help="WandB run name (default: auto-generated)")
+    parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity (organization/username)")
 
-    # その他
-    parser.add_argument("--seed", type=int, default=42, help="乱数シード")
+    # Other
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--mixed_precision", type=str, default="bf16", choices=["no", "fp16", "bf16"])
-    parser.add_argument("--resume_from", type=str, default=None, help="チェックポイントから再開")
-    parser.add_argument("--max_train_steps", type=int, default=None, help="最大学習ステップ数（WebDataset用）")
+    parser.add_argument("--resume_from", type=str, default=None, help="Resume from checkpoint")
+    parser.add_argument("--max_train_steps", type=int, default=None, help="Maximum training steps (for WebDataset)")
 
     return parser.parse_args()
 
 
 def create_model(args, accelerator):
-    """モデルを作成"""
+    """Create model"""
     accelerator.print(f"Loading base decoder from {args.decoder_model_path}...")
 
-    # 24kHzデコーダーをロード
+    # Load 24kHz decoder
     tokenizer = Qwen3TTSTokenizer.from_pretrained(
         args.decoder_model_path,
         attn_implementation="flash_attention_2",
@@ -118,7 +118,7 @@ def create_model(args, accelerator):
     )
     base_decoder = tokenizer.model.decoder
 
-    # 48kHzデコーダーを作成
+    # Create 48kHz decoder
     config_dict = base_decoder.config.to_dict()
     config_dict.update({
         "enable_48khz_upsampler": True,
@@ -131,14 +131,14 @@ def create_model(args, accelerator):
     )
     decoder = Qwen3TTSTokenizer48kDecoder(decoder_config)
 
-    # 24kHz部分の重みをコピー
+    # Copy 24kHz part weights
     missing_keys, unexpected_keys = decoder.load_state_dict(
         base_decoder.state_dict(), strict=False
     )
     accelerator.print(f"Missing keys (expected for upsampler): {missing_keys}")
     accelerator.print(f"Unexpected keys: {unexpected_keys}")
 
-    # 24kHz部分を凍結、アップサンプラーのみ学習
+    # Freeze 24kHz part, train only upsampler
     for name, param in decoder.named_parameters():
         if 'upsampler' not in name:
             param.requires_grad = False
@@ -146,7 +146,7 @@ def create_model(args, accelerator):
             param.requires_grad = True
             accelerator.print(f"Trainable: {name}")
 
-    # 学習可能なパラメータ数を表示
+    # Display trainable parameter count
     trainable_params = sum(p.numel() for p in decoder.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in decoder.parameters())
     accelerator.print(f"Trainable parameters: {trainable_params:,} / {total_params:,} ({trainable_params/total_params*100:.2f}%)")
@@ -160,7 +160,7 @@ def train_step(
     loss_fn: UpsamplerLoss,
     accelerator: Accelerator,
 ) -> dict:
-    """1ステップの学習"""
+    """Single training step"""
     audio_codes = batch["audio_codes"]  # (batch, seq_len, 16)
     target_48k = batch["audio_48k"]     # (batch, samples)
     lengths_48k = batch["audio_48k_lengths"]
@@ -170,20 +170,20 @@ def train_step(
     target_48k = target_48k.to(accelerator.device)
     lengths_48k = lengths_48k.to(accelerator.device)
 
-    # seq_lenを計算（transpose前）
+    # Calculate seq_len (before transpose)
     batch_size, seq_len, _ = audio_codes.shape
     total_seq_len = batch_size * seq_len
 
-    # codes の形状を (batch, 16, seq_len) に変換
+    # Convert codes shape to (batch, 16, seq_len)
     audio_codes = audio_codes.transpose(1, 2)
 
-    # デコーダーで48kHz波形を生成
+    # Generate 48kHz waveform with decoder
     pred_48k = model(audio_codes)  # (batch, 1, samples)
 
-    # 損失計算
+    # Calculate loss
     losses = loss_fn(pred_48k, target_48k, lengths_48k)
 
-    # seq_len情報を追加
+    # Add seq_len information
     losses["seq_len"] = torch.tensor(total_seq_len, dtype=torch.float32, device=accelerator.device)
 
     return losses
@@ -197,7 +197,7 @@ def eval_step(
     accelerator: Accelerator,
     max_batches: int = 50,
 ) -> dict:
-    """評価"""
+    """Evaluation"""
     model.eval()
 
     total_losses = {}
@@ -228,7 +228,7 @@ def eval_step(
 
         num_batches += 1
 
-    # 平均を計算
+    # Calculate average
     avg_losses = {k: v / num_batches for k, v in total_losses.items()}
 
     model.train()
@@ -245,21 +245,21 @@ def save_checkpoint(
     accelerator: Accelerator,
     is_best: bool = False,
 ):
-    """チェックポイントを保存"""
+    """Save checkpoint"""
     if not accelerator.is_main_process:
         return
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # アップサンプラーの重みのみ保存
+    # Save only upsampler weights
     unwrapped_model = accelerator.unwrap_model(model)
     upsampler_state_dict = {
         k: v.cpu() for k, v in unwrapped_model.state_dict().items()
         if 'upsampler' in k
     }
 
-    # チェックポイント名
+    # Checkpoint name
     checkpoint_name = f"checkpoint-step-{step}"
     if is_best:
         checkpoint_name = "checkpoint-best"
@@ -267,10 +267,10 @@ def save_checkpoint(
     checkpoint_dir = output_dir / checkpoint_name
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # 重みを保存
+    # Save weights
     save_file(upsampler_state_dict, str(checkpoint_dir / "upsampler.safetensors"))
 
-    # 設定を保存
+    # Save config
     config_dict = {
         "upsampler_hidden_dim": args.upsampler_hidden_dim,
         "upsampler_kernel_size": args.upsampler_kernel_size,
@@ -281,7 +281,7 @@ def save_checkpoint(
     with open(checkpoint_dir / "config.json", "w") as f:
         json.dump(config_dict, f, indent=2)
 
-    # オプティマイザとスケジューラの状態を保存
+    # Save optimizer and scheduler state
     torch.save({
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict() if scheduler else None,
@@ -295,7 +295,7 @@ def save_checkpoint(
 def main():
     args = parse_args()
 
-    # Accelerator の初期化
+    # Initialize Accelerator
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
@@ -303,17 +303,17 @@ def main():
         project_dir=args.output_dir,
     )
 
-    # 乱数シードを設定
+    # Set random seed
     set_seed(args.seed)
 
-    # 出力ディレクトリを作成
+    # Create output directory
     if accelerator.is_main_process:
         os.makedirs(args.output_dir, exist_ok=True)
 
-    # モデルを作成
+    # Create model
     model = create_model(args, accelerator)
 
-    # 損失関数
+    # Loss function
     loss_fn = UpsamplerLoss(
         sample_rate=48000,
         l1_weight=args.l1_weight,
@@ -322,10 +322,10 @@ def main():
         rms_weight=args.rms_weight,
     )
 
-    # データセット作成（WebDataset）
+    # Create dataset (WebDataset)
     accelerator.print(f"Loading training data from WebDataset: {args.train_shards}...")
 
-    # glob パターンの場合は展開
+    # Expand glob pattern if applicable
     path = args.train_shards
     if "*" in path and "{" not in path:
         expanded_files = sorted(glob.glob(path))
@@ -333,7 +333,7 @@ def main():
             print(f"Error: No files found matching pattern: {path}")
             sys.exit(1)
         print(f"Found {len(expanded_files)} tar files")
-        # リストを WebDataset 形式に変換
+        # Convert list to WebDataset format
         shard_pattern = expanded_files
     else:
         shard_pattern = path
@@ -349,7 +349,7 @@ def main():
     )
     accelerator.print("Training dataloader created (WebDataset)")
 
-    # 検証データ（オプション）
+    # Validation data (optional)
     val_dataloader = None
     if args.val_shards:
         path = args.val_shards
@@ -359,7 +359,7 @@ def main():
                 print(f"Error: No files found matching pattern: {path}")
                 sys.exit(1)
             print(f"Found {len(expanded_files)} tar files")
-            # リストを WebDataset 形式に変換
+            # Convert list to WebDataset format
             shard_pattern = expanded_files
         else:
             shard_pattern = path
@@ -372,44 +372,44 @@ def main():
             min_audio_length=args.min_audio_length,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
-            shuffle_buffer=0,  # 検証データはシャッフル不要
+            shuffle_buffer=0,  # No shuffle needed for validation data
         )
         accelerator.print("Validation dataloader created (WebDataset)")
 
-    # オプティマイザ
+    # Optimizer
     optimizer = AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=args.lr,
         weight_decay=args.weight_decay,
     )
 
-    # スケジューラ
+    # Scheduler
     if args.max_train_steps:
         total_steps = args.max_train_steps
     else:
         try:
             total_steps = len(train_dataloader) * args.num_epochs // args.gradient_accumulation_steps
         except TypeError:
-            # WebDataset の場合、長さが取得できないので警告を出す
+            # For WebDataset, length cannot be obtained, so issue a warning
             accelerator.print(
                 "WARNING: Cannot determine dataset length (WebDataset). "
                 "Please specify --max_train_steps for proper learning rate scheduling."
             )
-            total_steps = 100000  # デフォルト値
+            total_steps = 100000  # Default value
 
     scheduler = CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=args.lr * 0.1)
     accelerator.print(f"Total training steps: {total_steps}")
 
-    # Accelerate で準備
+    # Prepare with Accelerate
     model, optimizer, train_dataloader, scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, scheduler
     )
     if val_dataloader:
         val_dataloader = accelerator.prepare(val_dataloader)
 
-    # トラッカーを初期化
+    # Initialize tracker
     if args.log_with:
-        # 共通の設定
+        # Common settings
         tracker_config = {
             "batch_size": args.batch_size,
             "lr": args.lr,
@@ -427,7 +427,7 @@ def main():
 
         if accelerator.is_main_process:
             if args.log_with == "wandb":
-                # WandB固有の設定
+                # WandB-specific settings
                 accelerator.init_trackers(
                     project_name=args.wandb_project,
                     config=tracker_config,
@@ -440,25 +440,25 @@ def main():
                     },
                 )
             elif args.log_with == "tensorboard":
-                # TensorBoard用の初期化
+                # TensorBoard initialization
                 accelerator.init_trackers(
                     project_name="qwen3-tts-upsampler",
                     config=tracker_config,
                 )
             else:
-                # その他のトラッカー
+                # Other trackers
                 accelerator.init_trackers(
                     project_name="qwen3-tts-upsampler",
                     config=tracker_config,
                 )
         else:
-            # 非メインプロセスでは最小限の初期化
+            # Minimal initialization for non-main processes
             if args.log_with == "wandb":
                 accelerator.init_trackers(project_name=args.wandb_project)
             else:
                 accelerator.init_trackers(project_name="qwen3-tts-upsampler")
 
-    # チェックポイントから再開
+    # Resume from checkpoint
     start_step = 0
     start_epoch = 0
     if args.resume_from:
@@ -470,10 +470,10 @@ def main():
         start_step = training_state["step"]
         start_epoch = training_state["epoch"]
 
-    # 学習ループ
+    # Training loop
     global_step = start_step
     best_val_loss = float("inf")
-    total_seq_len_accumulated = 0  # 累積seq_len
+    total_seq_len_accumulated = 0  # Accumulated seq_len
 
     model.train()
 
@@ -490,17 +490,17 @@ def main():
 
         for step, batch in enumerate(progress_bar):
             with accelerator.accumulate(model):
-                # 学習ステップ
+                # Training step
                 losses = train_step(model, batch, loss_fn, accelerator)
                 loss = losses["total_loss"]
 
-                # seq_lenを累積
+                # Accumulate seq_len
                 total_seq_len_accumulated += losses["seq_len"].item()
 
-                # バックワード
+                # Backward
                 accelerator.backward(loss)
 
-                # 勾配クリッピング
+                # Gradient clipping
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
@@ -508,7 +508,7 @@ def main():
                 scheduler.step()
                 optimizer.zero_grad()
 
-            # ログ出力
+            # Log output
             if global_step % args.log_every == 0:
                 log_dict = {k: v.item() for k, v in losses.items()}
                 log_dict["lr"] = scheduler.get_last_lr()[0]
@@ -521,7 +521,7 @@ def main():
                     stft=losses["stft_loss"].item(),
                 )
 
-            # 評価
+            # Evaluation
             if val_dataloader and global_step % args.eval_every == 0 and global_step > 0:
                 val_losses = eval_step(model, val_dataloader, loss_fn, accelerator)
                 accelerator.print(f"\nStep {global_step} - Validation losses:")
@@ -529,7 +529,7 @@ def main():
                     accelerator.print(f"  {k}: {v:.4f}")
                 accelerator.log({f"val_{k}": v for k, v in val_losses.items()}, step=global_step)
 
-                # ベストモデルを保存
+                # Save best model
                 if val_losses["total_loss"] < best_val_loss:
                     best_val_loss = val_losses["total_loss"]
                     save_checkpoint(
@@ -537,7 +537,7 @@ def main():
                         args, accelerator, is_best=True
                     )
 
-            # チェックポイント保存
+            # Save checkpoint
             if global_step % args.save_every == 0 and global_step > 0:
                 save_checkpoint(
                     model, optimizer, scheduler, global_step, epoch,
@@ -546,13 +546,13 @@ def main():
 
             global_step += 1
 
-        # エポック終了時にチェックポイント保存
+        # Save checkpoint at end of epoch
         save_checkpoint(
             model, optimizer, scheduler, global_step, epoch,
             args, accelerator
         )
 
-    # 最終チェックポイントを保存
+    # Save final checkpoint
     save_checkpoint(
         model, optimizer, scheduler, global_step, args.num_epochs,
         args, accelerator

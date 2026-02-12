@@ -1,50 +1,50 @@
 # Qwen3-TTS 48kHz Upsampler Implementation
 
-## 概要
+## Overview
 
-Qwen3-TTS-Tokenizer-12Hz のデコーダーを拡張し、48kHzアップサンプリング機能を追加しました。XCodec2の44.1kHz実装を参考に、既存の24kHz出力の後段に`UpSamplerBlock`を追加する方式を採用しています。
+We have extended the Qwen3-TTS-Tokenizer-12Hz decoder to add 48kHz upsampling functionality. Based on XCodec2's 44.1kHz implementation, we adopted an approach that adds `UpSamplerBlock` after the existing 24kHz output.
 
-48kHz関連のコードは `qwen_tts/core/tokenizer_48k/` に独立して配置し、12Hzトークナイザーのクラスをサブクラスで拡張する構成です。これにより upstream の12Hzトークナイザー更新とのコンフリクトを回避しています。
+The 48kHz-related code is independently placed in `qwen_tts/core/tokenizer_48k/`, extending the 12Hz tokenizer classes with subclasses. This avoids conflicts with upstream updates to the 12Hz tokenizer.
 
-## アーキテクチャ
+## Architecture
 
 ```
-[既存24kHzデコーダー] → [UpSamplerBlock (×2)] → [48kHz出力]
+[Existing 24kHz Decoder] → [UpSamplerBlock (×2)] → [48kHz Output]
 ```
 
-### UpSamplerBlock 構造
+### UpSamplerBlock Structure
 
 ```
 UpSamplerBlock
-├── CausalTransConvNet (1 → hidden_dim, stride=2)  # 2倍アップサンプリング
+├── CausalTransConvNet (1 → hidden_dim, stride=2)  # 2× upsampling
 ├── ResidualBlock × 2
 │   ├── SnakeBeta + CausalConvNet (dilation=1)
 │   └── SnakeBeta + CausalConvNet (dilation=3)
 ├── SnakeBeta
-└── CausalConvNet (hidden_dim → 1)  # 出力層
+└── CausalConvNet (hidden_dim → 1)  # Output layer
 ```
 
-## ファイル構成
+## File Structure
 
-### 48kHz コアモジュール（新規）
+### 48kHz Core Module (New)
 
-| ファイル | 内容 |
-|----------|------|
-| `qwen_tts/core/tokenizer_48k/configuration.py` | `Qwen3TTSTokenizer48kConfig`, `Qwen3TTSTokenizer48kDecoderConfig`（12Hz のサブクラス） |
+| File | Content |
+|------|---------|
+| `qwen_tts/core/tokenizer_48k/configuration.py` | `Qwen3TTSTokenizer48kConfig`, `Qwen3TTSTokenizer48kDecoderConfig` (subclass of 12Hz) |
 | `qwen_tts/core/tokenizer_48k/modeling.py` | `UpSamplerBlock`, `Qwen3TTSTokenizer48kDecoder`, `Qwen3TTSTokenizer48kModel` |
 
-### 学習・推論スクリプト
+### Training & Inference Scripts
 
-| ファイル | 説明 |
-|----------|------|
-| `finetuning/tokenizer48k/train_upsampler.py` | 学習スクリプト（WebDataset対応） |
-| `finetuning/tokenizer48k/upsampler_dataset.py` | 学習用データセットクラス |
-| `finetuning/tokenizer48k/upsampler_losses.py` | 損失関数（L1 + Multi-resolution STFT + Mel + RMS） |
-| `finetuning/tokenizer48k/merge_upsampler.py` | 学習済みアップサンプラーをマージするユーティリティ |
-| `finetuning/tokenizer48k/inference_upsampler.py` | 推論スクリプト |
-| `tests/test_48khz_upsampler.py` | テストスクリプト |
+| File | Description |
+|------|-------------|
+| `finetuning/tokenizer48k/train_upsampler.py` | Training script (WebDataset support) |
+| `finetuning/tokenizer48k/upsampler_dataset.py` | Training dataset class |
+| `finetuning/tokenizer48k/upsampler_losses.py` | Loss functions (L1 + Multi-resolution STFT + Mel + RMS) |
+| `finetuning/tokenizer48k/merge_upsampler.py` | Utility to merge trained upsampler |
+| `finetuning/tokenizer48k/inference_upsampler.py` | Inference script |
+| `tests/test_48khz_upsampler.py` | Test script |
 
-### クラス継承構造
+### Class Inheritance Structure
 
 ```
 Qwen3TTSTokenizerV2DecoderConfig  →  Qwen3TTSTokenizer48kDecoderConfig
@@ -53,33 +53,33 @@ Qwen3TTSTokenizerV2Decoder        →  Qwen3TTSTokenizer48kDecoder (+ UpSamplerB
 Qwen3TTSTokenizerV2Model          →  Qwen3TTSTokenizer48kModel
 ```
 
-## 追加された設定パラメータ
+## Added Configuration Parameters
 
 ### Qwen3TTSTokenizer48kDecoderConfig
 
-| パラメータ | デフォルト | 説明 |
-|-----------|-----------|------|
-| `enable_48khz_upsampler` | `True` | 48kHzアップサンプラーを有効化 |
-| `upsampler_hidden_dim` | `32` | アップサンプラーの隠れ層次元 |
-| `upsampler_kernel_size` | `4` | 転置畳み込みのカーネルサイズ |
-| `upsampler_factor` | `2` | アップサンプリング倍率 |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_48khz_upsampler` | `True` | Enable 48kHz upsampler |
+| `upsampler_hidden_dim` | `32` | Upsampler hidden dimension |
+| `upsampler_kernel_size` | `4` | Transposed convolution kernel size |
+| `upsampler_factor` | `2` | Upsampling factor |
 
-### 自動調整される値（48kHz有効時）
+### Auto-adjusted Values (when 48kHz enabled)
 
-| パラメータ | 24kHz | 48kHz |
+| Parameter | 24kHz | 48kHz |
 |-----------|-------|-------|
 | `output_sample_rate` | 24000 | 48000 |
 | `decode_upsample_rate` | 1920 | 3840 |
 
-## 使用方法
+## Usage
 
-### 48kHzモードでモデルを初期化
+### Initialize Model in 48kHz Mode
 
 ```python
 from qwen_tts.core.tokenizer_48k.configuration import Qwen3TTSTokenizer48kConfig
 from qwen_tts.core.tokenizer_48k.modeling import Qwen3TTSTokenizer48kModel
 
-# 48kHz設定でコンフィグ作成
+# Create config with 48kHz settings
 config = Qwen3TTSTokenizer48kConfig(
     decoder_config={
         "enable_48khz_upsampler": True,
@@ -87,23 +87,23 @@ config = Qwen3TTSTokenizer48kConfig(
     }
 )
 
-# モデル初期化
+# Initialize model
 model = Qwen3TTSTokenizer48kModel(config)
 ```
 
-### マージ済み48kHzモデルをロード
+### Load Merged 48kHz Model
 
 ```python
 from qwen_tts import Qwen3TTSTokenizer
 
-# model_type: "qwen3_tts_tokenizer_48k" の config.json を持つモデルを自動検出
+# Automatically detects models with model_type: "qwen3_tts_tokenizer_48k" in config.json
 tokenizer = Qwen3TTSTokenizer.from_pretrained("output/Qwen3-TTS-Tokenizer-12Hz-48kHz")
 ```
 
-### 学習時の凍結設定
+### Freeze Settings During Training
 
 ```python
-# 既存の24kHz部分を凍結し、アップサンプラーのみ学習
+# Freeze existing 24kHz parts and train only the upsampler
 for name, param in model.named_parameters():
     if 'upsampler' not in name:
         param.requires_grad = False
@@ -114,13 +114,13 @@ optimizer = torch.optim.AdamW(
 )
 ```
 
-## テスト
+## Testing
 
 ```bash
 uv run python tests/test_48khz_upsampler.py
 ```
 
-### テスト結果
+### Test Results
 
 ```
 ==================================================
@@ -139,47 +139,47 @@ uv run python tests/test_48khz_upsampler.py
 All tests passed!
 ```
 
-## パラメータ数
+## Parameter Count
 
-| モデル | パラメータ数 | 増加率 |
-|--------|-------------|--------|
+| Model | Parameters | Increase |
+|-------|-----------|----------|
 | 24kHz decoder | 187,118,273 | - |
 | 48kHz decoder | 187,135,490 | +0.01% |
 | Upsampler only | 17,217 | - |
 
-## 学習について
+## Training
 
-48kHz品質を得るには、アップサンプラー部分の追加学習が必要です。
+To achieve 48kHz quality, additional training of the upsampler is required.
 
-### 推奨学習設定
+### Recommended Training Settings
 
-| パラメータ | 値 |
-|-----------|-----|
-| バッチサイズ | 32 |
-| 学習率 | 1e-4 |
-| ステップ数 | 100k-200k |
-| オプティマイザ | AdamW |
-| 損失関数 | L1 + Multi-resolution STFT |
+| Parameter | Value |
+|-----------|-------|
+| Batch size | 32 |
+| Learning rate | 1e-4 |
+| Steps | 100k-200k |
+| Optimizer | AdamW |
+| Loss function | L1 + Multi-resolution STFT |
 
-### データセット要件
+### Dataset Requirements
 
-- 48kHz音声データ（または24kHz→48kHzペアデータ）
-- 学習時は48kHz音声を24kHzにダウンサンプリングしてペア作成可能
+- 48kHz audio data (or 24kHz→48kHz paired data)
+- During training, 48kHz audio can be downsampled to 24kHz to create pairs
 
 ---
 
-## アップサンプラー学習
+## Upsampler Training
 
-### データ形式（WebDataset）
+### Data Format (WebDataset)
 
-[WebDataset](https://github.com/webdataset/webdataset)形式で用意します。各サンプルは以下のキーを持つ必要があります:
-- `{filetype}`: 音声データのバイナリ（.flac, .wav, .mp3 など）
-- `npy`: audio_codes の numpy 配列（uint16、shape: [seq_len, 16]）
+Prepare data in [WebDataset](https://github.com/webdataset/webdataset) format. Each sample must have the following keys:
+- `{filetype}`: Audio data binary (.flac, .wav, .mp3, etc.)
+- `npy`: audio_codes numpy array (uint16, shape: [seq_len, 16])
 
-### 学習の実行
+### Running Training
 
 ```bash
-# 単一GPU
+# Single GPU
 python finetuning/tokenizer48k/train_upsampler.py \
     --train_shards "data/train-{000000..000100}.tar" \
     --val_shards "data/val-{000000..000010}.tar" \
@@ -188,7 +188,7 @@ python finetuning/tokenizer48k/train_upsampler.py \
     --lr 1e-4 \
     --max_train_steps 100000
 
-# マルチGPU (accelerate)
+# Multi-GPU (accelerate)
 accelerate launch finetuning/tokenizer48k/train_upsampler.py \
     --train_shards "data/train-*.tar" \
     --val_shards "data/val-*.tar" \
@@ -198,38 +198,38 @@ accelerate launch finetuning/tokenizer48k/train_upsampler.py \
     --max_train_steps 100000
 ```
 
-**注意**: WebDataset を使う場合は `--max_train_steps` の指定を推奨（データセット長が不定のため）
+**Note**: When using WebDataset, specifying `--max_train_steps` is recommended (since dataset length is indeterminate)
 
-なおここでリリースしているモデルは以下のスクリプトでトレーニングしました。
+The released model was trained using the following script:
 ```
 finetuning/tokenizer48k/train_upsampler.sh
 ```
 
-### 学習パラメータ
+### Training Parameters
 
-| パラメータ | デフォルト | 説明 |
-|-----------|-----------|------|
-| `--batch_size` | 8 | バッチサイズ |
-| `--lr` | 1e-4 | 学習率 |
-| `--num_epochs` | 100 | エポック数 |
-| `--gradient_accumulation_steps` | 4 | 勾配累積ステップ数 |
-| `--l1_weight` | 1.0 | L1損失の重み |
-| `--stft_weight` | 1.0 | STFT損失の重み |
-| `--mel_weight` | 1.0 | メル損失の重み |
-| `--rms_weight` | 1.0 | RMS損失の重み |
-| `--max_audio_length` | 10.0 | 最大オーディオ長（秒） |
-| `--upsampler_hidden_dim` | 32 | アップサンプラーの隠れ層次元 |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--batch_size` | 8 | Batch size |
+| `--lr` | 1e-4 | Learning rate |
+| `--num_epochs` | 100 | Number of epochs |
+| `--gradient_accumulation_steps` | 4 | Gradient accumulation steps |
+| `--l1_weight` | 1.0 | L1 loss weight |
+| `--stft_weight` | 1.0 | STFT loss weight |
+| `--mel_weight` | 1.0 | Mel loss weight |
+| `--rms_weight` | 1.0 | RMS loss weight |
+| `--max_audio_length` | 10.0 | Maximum audio length (seconds) |
+| `--upsampler_hidden_dim` | 32 | Upsampler hidden dimension |
 
-### WandB設定
+### WandB Settings
 
-| パラメータ | デフォルト | 説明 |
-|-----------|-----------|------|
-| `--wandb_project` | `qwen3-tts-upsampler` | WandBプロジェクト名 |
-| `--wandb_run_name` | (自動生成) | WandB run名 |
-| `--wandb_entity` | (なし) | WandB entity（組織/ユーザー名） |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--wandb_project` | `qwen3-tts-upsampler` | WandB project name |
+| `--wandb_run_name` | (auto-generated) | WandB run name |
+| `--wandb_entity` | (none) | WandB entity (organization/username) |
 
 ```bash
-# WandB設定を指定して学習
+# Training with WandB settings
 python finetuning/tokenizer48k/train_upsampler.py \
     --train_shards "data/train-{000000..000100}.tar" \
     --wandb_project my-upsampler-project \
@@ -237,9 +237,9 @@ python finetuning/tokenizer48k/train_upsampler.py \
     --wandb_entity my-team
 ```
 
-### 学習済みモデルのマージ
+### Merging Trained Model
 
-学習完了後、24kHzモデルとアップサンプラーをマージして48kHzモデルを作成:
+After training, merge the 24kHz model and upsampler to create a 48kHz model:
 
 ```bash
 python finetuning/tokenizer48k/merge_upsampler.py \
@@ -248,48 +248,48 @@ python finetuning/tokenizer48k/merge_upsampler.py \
     --output_path output/Qwen3-TTS-Tokenizer-12Hz-48kHz
 ```
 
-### 損失関数
+### Loss Functions
 
-アップサンプラーの学習には以下の損失関数を使用:
+The upsampler training uses the following loss functions:
 
-1. **L1 Loss**: 波形の直接比較
-2. **Multi-resolution STFT Loss**: 複数の解像度でスペクトル比較
+1. **L1 Loss**: Direct waveform comparison
+2. **Multi-resolution STFT Loss**: Spectral comparison at multiple resolutions
    - FFT sizes: [512, 1024, 2048, 4096]
    - Spectral convergence loss + Log magnitude loss
-3. **Mel Spectrogram Loss**: メルスペクトログラムの比較
-4. **RMS Loss**: 複数解像度のRMSエネルギー比較
+3. **Mel Spectrogram Loss**: Mel spectrogram comparison
+4. **RMS Loss**: Multi-resolution RMS energy comparison
    - Frame sizes: [512, 2048, 8192]
-   - 振幅エンベロープの一致を促進
+   - Promotes amplitude envelope matching
 
-合計損失 = L1 × l1_weight + STFT × stft_weight + Mel × mel_weight + RMS × rms_weight
+Total loss = L1 × l1_weight + STFT × stft_weight + Mel × mel_weight + RMS × rms_weight
 
 ---
 
-## 推論
+## Inference
 
-学習済みのアップサンプラーを使用して48kHz音声を生成する方法です。
+How to generate 48kHz audio using a trained upsampler.
 
-### 方法1: チェックポイントから直接推論
+### Method 1: Direct Inference from Checkpoint
 
-学習済みのupsampler.safetensorsとconfig.jsonから48kHzモデルを復元して推論を行います。
+Restore a 48kHz model from trained upsampler.safetensors and config.json for inference.
 
 ```bash
-# 音声ファイルをエンコード→48kHzデコード
+# Encode audio file → decode to 48kHz
 python finetuning/tokenizer48k/inference_upsampler.py \
     --upsampler_checkpoint output/upsampler/checkpoint-best \
     --input_audio input.wav \
     --output_audio output_48k.wav
 
-# audio_codesファイル（.npy）から48kHzデコード
+# Decode from audio_codes file (.npy) to 48kHz
 python finetuning/tokenizer48k/inference_upsampler.py \
     --upsampler_checkpoint output/upsampler/checkpoint-best \
     --input_codes input_codes.npy \
     --output_audio output_48k.wav
 ```
 
-### 方法2: マージ済みモデルで推論
+### Method 2: Inference with Merged Model
 
-`merge_upsampler.py`でマージした48kHzモデルを使用:
+Use a 48kHz model merged with `merge_upsampler.py`:
 
 ```bash
 python finetuning/tokenizer48k/inference_upsampler.py \
@@ -298,47 +298,47 @@ python finetuning/tokenizer48k/inference_upsampler.py \
     --output_audio output_48k.wav
 ```
 
-### 推論パラメータ
+### Inference Parameters
 
-| パラメータ | デフォルト | 説明 |
-|-----------|-----------|------|
-| `--model_path` | なし | マージ済み48kHzモデルのパス |
-| `--base_model_path` | `Qwen/Qwen3-TTS-Tokenizer-12Hz` | ベース24kHzモデルのパス |
-| `--upsampler_checkpoint` | なし | アップサンプラーチェックポイントのパス |
-| `--input_audio` | なし | 入力音声ファイル |
-| `--input_codes` | なし | 入力audio_codes（.npy形式） |
-| `--output_audio` | `output_48k.wav` | 出力音声ファイル |
-| `--device` | `auto` | デバイス（auto, cpu, cuda） |
-| `--dtype` | `bfloat16` | データ型 |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--model_path` | None | Path to merged 48kHz model |
+| `--base_model_path` | `Qwen/Qwen3-TTS-Tokenizer-12Hz` | Base 24kHz model path |
+| `--upsampler_checkpoint` | None | Upsampler checkpoint path |
+| `--input_audio` | None | Input audio file |
+| `--input_codes` | None | Input audio_codes (.npy format) |
+| `--output_audio` | `output_48k.wav` | Output audio file |
+| `--device` | `auto` | Device (auto, cpu, cuda) |
+| `--dtype` | `bfloat16` | Data type |
 
-### Pythonコードから使用
+### Using from Python Code
 
 ```python
 from finetuning.tokenizer48k.inference_upsampler import Qwen3TTSTokenizer48kHz
 
-# チェックポイントから48kHzモデルを復元
+# Restore 48kHz model from checkpoint
 tokenizer = Qwen3TTSTokenizer48kHz(
     base_model_path="Qwen/Qwen3-TTS-Tokenizer-12Hz",
     upsampler_checkpoint="output/upsampler/checkpoint-best",
 )
 
-# 音声ファイルをエンコード→48kHzデコード
+# Encode audio file → decode to 48kHz
 wav, sr = tokenizer.encode_decode("input.wav")
 print(f"Output sample rate: {sr}")  # 48000
 
-# audio_codesから直接デコード
+# Decode directly from audio_codes
 import numpy as np
 audio_codes = np.load("input_codes.npy")  # shape: [seq_len, 16]
 wavs, sr = tokenizer.decode_from_codes(audio_codes)
 
-# 波形を保存
+# Save waveform
 import soundfile as sf
 sf.write("output_48k.wav", wav, sr)
 ```
 
 ---
 
-## 参考リンク
+## References
 
 - [Qwen3-TTS-Tokenizer-12Hz](https://huggingface.co/Qwen/Qwen3-TTS-Tokenizer-12Hz)
 - [Anime-XCodec2-44.1kHz-v2](https://huggingface.co/NandemoGHS/Anime-XCodec2-44.1kHz-v2)
@@ -346,9 +346,9 @@ sf.write("output_48k.wav", wav, sr)
 
 ---
 
-## config.json 例
+## config.json Example
 
-### 48kHz用 config.json
+### 48kHz config.json
 
 ```json
 {

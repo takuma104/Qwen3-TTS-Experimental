@@ -2,11 +2,11 @@
 # Copyright 2026 The Alibaba Qwen team & Takuma Mori.
 # SPDX-License-Identifier: Apache-2.0
 """
-48kHz Upsampler 学習用データセット
+Dataset for 48kHz Upsampler Training
 
-データ形式:
-- audio_codes: エンコード済みの音声コード (12Hz, 16 quantizers)
-- audio: 元の音声ファイルパス（48kHzまたはリサンプリング対象）
+Data format:
+- audio_codes: Encoded audio codes (12Hz, 16 quantizers)
+- audio: Original audio file path (48kHz or to be resampled)
 """
 
 from typing import List
@@ -18,18 +18,18 @@ import torch
 
 def collate_fn(batch: List[dict]) -> dict:
     """
-    バッチをコレートする関数
+    Collate function for batching
 
-    異なる長さのオーディオをパディングして揃える
+    Pads audio of different lengths to align them
     """
-    # 最大長を取得
+    # Get maximum lengths
     max_codes = max(b["audio_codes"].shape[0] for b in batch)
     max_samples_48k = max(b["audio_48k"].shape[0] for b in batch)
     max_samples_24k = max(b["audio_24k"].shape[0] for b in batch)
 
     batch_size = len(batch)
 
-    # バッチテンソルを初期化
+    # Initialize batch tensors
     audio_codes = torch.zeros(batch_size, max_codes, 16, dtype=torch.long)
     audio_48k = torch.zeros(batch_size, max_samples_48k)
     audio_24k = torch.zeros(batch_size, max_samples_24k)
@@ -70,16 +70,16 @@ def create_webdataset_loader(
     shuffle_buffer: int = 1000,
 ):
     """
-    WebDataset形式のデータローダーを作成
+    Create WebDataset format data loader
 
     Args:
-        shard_pattern: tarファイルのパターン (例: "output/shards-{000000..000010}.tar")
-        target_sample_rate: ターゲットのサンプルレート
-        max_audio_length: 最大オーディオ長（秒）
-        min_audio_length: 最小オーディオ長（秒）
-        batch_size: バッチサイズ
-        num_workers: ワーカー数
-        shuffle_buffer: シャッフルバッファサイズ
+        shard_pattern: tar file pattern (e.g., "output/shards-{000000..000010}.tar")
+        target_sample_rate: Target sample rate
+        max_audio_length: Maximum audio length (seconds)
+        min_audio_length: Minimum audio length (seconds)
+        batch_size: Batch size
+        num_workers: Number of workers
+        shuffle_buffer: Shuffle buffer size
 
     Returns:
         DataLoader
@@ -89,21 +89,21 @@ def create_webdataset_loader(
     from torch.utils.data import DataLoader
 
     def _process_sample(sample):
-        """WebDatasetのサンプルを処理"""
-        # audio_codes を numpy から tensor に変換
-        audio_codes = sample["npy"]  # (seq_len, 16) の numpy 配列
+        """Process WebDataset sample"""
+        # Convert audio_codes from numpy to tensor
+        audio_codes = sample["npy"]  # numpy array of shape (seq_len, 16)
         assert isinstance(audio_codes, np.ndarray), "audio_codes must be a numpy array"
         assert audio_codes.ndim == 1
         audio_codes = audio_codes.reshape(-1, 16) # (seq_len, 16)
         audio_codes = torch.from_numpy(audio_codes).long()
         num_codes = audio_codes.shape[0]
 
-        # 最小長チェック
+        # Minimum length check
         min_codes = int(12 * min_audio_length)
         if num_codes < min_codes:
             return None
 
-        # 音声データを取得（複数のフォーマットに対応）
+        # Get audio data (support multiple formats)
         audio_data = None
         for ext in ["wav", "mp3", "flac", "ogg", "opus"]:
             if ext in sample:
@@ -113,41 +113,41 @@ def create_webdataset_loader(
         if audio_data is None:
             return None
 
-        # librosa で読み込み
+        # Load with librosa
         audio, sr = librosa.load(io.BytesIO(audio_data), sr=None, mono=True)
         if audio.ndim > 1:
             audio = np.mean(audio, axis=-1)
         audio = audio.astype(np.float32)
 
-        # 最大長でクロップ（必要な場合）
+        # Crop to maximum length (if necessary)
         max_codes = int(12 * max_audio_length)
         if num_codes > max_codes:
-            # ランダムな開始位置を選択
+            # Select random start position
             start_code = torch.randint(0, num_codes - max_codes, (1,)).item()
             end_code = start_code + max_codes
 
             audio_codes = audio_codes[start_code:end_code]
             num_codes = max_codes
 
-            # オーディオも対応する範囲でクロップ
+            # Crop audio to corresponding range
             samples_per_code = sr / 12
             start_sample = int(start_code * samples_per_code)
             end_sample = int(end_code * samples_per_code)
             audio = audio[start_sample:end_sample]
 
-        # ターゲット（48kHz）にリサンプリング
+        # Resample to target (48kHz)
         if sr != target_sample_rate:
             audio_48k = librosa.resample(audio, orig_sr=sr, target_sr=target_sample_rate)
         else:
             audio_48k = audio
 
-        # 24kHzにもリサンプリング（参照用）
+        # Also resample to 24kHz (for reference)
         if sr != 24000:
             audio_24k = librosa.resample(audio, orig_sr=sr, target_sr=24000)
         else:
             audio_24k = audio
 
-        # tensor に変換
+        # Convert to tensor
         audio_48k = torch.from_numpy(audio_48k).float()
         audio_24k = torch.from_numpy(audio_24k).float()
 
@@ -157,16 +157,16 @@ def create_webdataset_loader(
             "audio_24k": audio_24k,      # (samples_24k,)
         }
 
-    # WebDataset を構築
+    # Build WebDataset
     dataset = (
         wds.WebDataset(shard_pattern, shardshuffle=1000)
         .shuffle(shuffle_buffer if shuffle_buffer > 0 else 0)
-        .decode("rgb")  # 画像以外はそのまま
+        .decode("rgb")  # Non-image data as-is
         .map(_process_sample)
-        .select(lambda x: x is not None)  # None をフィルタ
+        .select(lambda x: x is not None)  # Filter None
     )
 
-    # WebLoader でバッチング
+    # Batching with WebLoader
     loader = wds.WebLoader(
         dataset, batch_size=None, num_workers=num_workers
     ).batched(batch_size, collation_fn=collate_fn)
@@ -175,7 +175,7 @@ def create_webdataset_loader(
 
 
 if __name__ == "__main__":
-    # テスト用
+    # For testing
     import glob
     import sys
 
@@ -187,7 +187,7 @@ if __name__ == "__main__":
 
     print("Testing WebDataset loader...")
 
-    # glob パターンの場合は展開
+    # Expand glob pattern if applicable
     if "*" in path and "{" not in path:
         expanded_files = sorted(glob.glob(path))
         if not expanded_files:
