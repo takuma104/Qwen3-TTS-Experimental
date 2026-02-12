@@ -881,9 +881,7 @@ class Qwen3TTSTokenizerV2Decoder(Qwen3TTSTokenizerV2DecoderPreTrainedModel):
         wav = hidden
         for block in self.decoder:
             wav = block(wav)
-        wav = wav.clamp(min=-1, max=1)
-
-        return wav
+        return wav.clamp(min=-1, max=1)
 
     def chunked_decode(self, codes, chunk_size=300, left_context_size=25):
         wavs = []

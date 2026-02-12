@@ -168,10 +168,9 @@ class Qwen3TTSTokenizerV2Config(PretrainedConfig):
 
         self.encoder_valid_num_quantizers = encoder_valid_num_quantizers
         self.input_sample_rate = input_sample_rate
-        self.encode_downsample_rate = encode_downsample_rate
-
         self.output_sample_rate = output_sample_rate
         self.decode_upsample_rate = decode_upsample_rate
+        self.encode_downsample_rate = encode_downsample_rate
 
 
 __all__ = ["Qwen3TTSTokenizerV2Config", "Qwen3TTSTokenizerV2DecoderConfig"]
