@@ -45,12 +45,23 @@ from qwen_tts.core.tokenizer_48k.modeling import Qwen3TTSTokenizer48kDecoder
 
 from qwen_tts import Qwen3TTSTokenizer
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train 48kHz Upsampler")
 
     # Data
-    parser.add_argument("--train_shards", type=str, required=True, help="WebDataset shard pattern for training data")
-    parser.add_argument("--val_shards", type=str, default=None, help="WebDataset shard pattern for validation data")
+    parser.add_argument(
+        "--train_shards",
+        type=str,
+        required=True,
+        help="WebDataset shard pattern for training data",
+    )
+    parser.add_argument(
+        "--val_shards",
+        type=str,
+        default=None,
+        help="WebDataset shard pattern for validation data",
+    )
 
     # Model
     parser.add_argument(
@@ -59,8 +70,15 @@ def parse_args():
         default="Qwen/Qwen3-TTS-Tokenizer-12Hz",
         help="Base 24kHz decoder model path",
     )
-    parser.add_argument("--upsampler_hidden_dim", type=int, default=32, help="Upsampler hidden dimension")
-    parser.add_argument("--upsampler_kernel_size", type=int, default=4, help="Upsampler kernel size")
+    parser.add_argument(
+        "--upsampler_hidden_dim",
+        type=int,
+        default=32,
+        help="Upsampler hidden dimension",
+    )
+    parser.add_argument(
+        "--upsampler_kernel_size", type=int, default=4, help="Upsampler kernel size"
+    )
 
     # Training settings
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
@@ -68,39 +86,97 @@ def parse_args():
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--num_epochs", type=int, default=100, help="Number of epochs")
     parser.add_argument("--warmup_steps", type=int, default=1000, help="Warmup steps")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=4, help="Gradient accumulation steps")
-    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Maximum gradient norm for clipping")
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=4,
+        help="Gradient accumulation steps",
+    )
+    parser.add_argument(
+        "--max_grad_norm",
+        type=float,
+        default=1.0,
+        help="Maximum gradient norm for clipping",
+    )
 
     # Loss function weights
     parser.add_argument("--l1_weight", type=float, default=1.0, help="L1 loss weight")
-    parser.add_argument("--stft_weight", type=float, default=1.0, help="STFT loss weight")
+    parser.add_argument(
+        "--stft_weight", type=float, default=1.0, help="STFT loss weight"
+    )
     parser.add_argument("--mel_weight", type=float, default=1.0, help="Mel loss weight")
     parser.add_argument("--rms_weight", type=float, default=1.0, help="RMS loss weight")
 
     # Data settings
-    parser.add_argument("--max_audio_length", type=float, default=10.0, help="Maximum audio length (seconds)")
-    parser.add_argument("--min_audio_length", type=float, default=1.0, help="Minimum audio length (seconds)")
-    parser.add_argument("--num_workers", type=int, default=0, help="Number of DataLoader workers")
+    parser.add_argument(
+        "--max_audio_length",
+        type=float,
+        default=10.0,
+        help="Maximum audio length (seconds)",
+    )
+    parser.add_argument(
+        "--min_audio_length",
+        type=float,
+        default=1.0,
+        help="Minimum audio length (seconds)",
+    )
+    parser.add_argument(
+        "--num_workers", type=int, default=0, help="Number of DataLoader workers"
+    )
 
     # Output
-    parser.add_argument("--output_dir", type=str, default="output/upsampler", help="Output directory")
-    parser.add_argument("--save_every", type=int, default=1000, help="Checkpoint save interval (steps)")
-    parser.add_argument("--eval_every", type=int, default=500, help="Evaluation interval (steps)")
-    parser.add_argument("--log_every", type=int, default=10, help="Log output interval (steps)")
+    parser.add_argument(
+        "--output_dir", type=str, default="output/upsampler", help="Output directory"
+    )
+    parser.add_argument(
+        "--save_every", type=int, default=1000, help="Checkpoint save interval (steps)"
+    )
+    parser.add_argument(
+        "--eval_every", type=int, default=500, help="Evaluation interval (steps)"
+    )
+    parser.add_argument(
+        "--log_every", type=int, default=10, help="Log output interval (steps)"
+    )
 
     # Logging settings
-    parser.add_argument("--log_with", type=str, default="wandb", help="Logging method (e.g., wandb)")
+    parser.add_argument(
+        "--log_with", type=str, default="wandb", help="Logging method (e.g., wandb)"
+    )
 
     # WandB settings
-    parser.add_argument("--wandb_project", type=str, default="qwen3-tts-upsampler", help="WandB project name")
-    parser.add_argument("--wandb_run_name", type=str, default=None, help="WandB run name (default: auto-generated)")
-    parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity (organization/username)")
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="qwen3-tts-upsampler",
+        help="WandB project name",
+    )
+    parser.add_argument(
+        "--wandb_run_name",
+        type=str,
+        default=None,
+        help="WandB run name (default: auto-generated)",
+    )
+    parser.add_argument(
+        "--wandb_entity",
+        type=str,
+        default=None,
+        help="WandB entity (organization/username)",
+    )
 
     # Other
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--mixed_precision", type=str, default="bf16", choices=["no", "fp16", "bf16"])
-    parser.add_argument("--resume_from", type=str, default=None, help="Resume from checkpoint")
-    parser.add_argument("--max_train_steps", type=int, default=None, help="Maximum training steps (for WebDataset)")
+    parser.add_argument(
+        "--mixed_precision", type=str, default="bf16", choices=["no", "fp16", "bf16"]
+    )
+    parser.add_argument(
+        "--resume_from", type=str, default=None, help="Resume from checkpoint"
+    )
+    parser.add_argument(
+        "--max_train_steps",
+        type=int,
+        default=None,
+        help="Maximum training steps (for WebDataset)",
+    )
 
     return parser.parse_args()
 
@@ -120,12 +196,14 @@ def create_model(args, accelerator):
 
     # Create 48kHz decoder
     config_dict = base_decoder.config.to_dict()
-    config_dict.update({
-        "enable_48khz_upsampler": True,
-        "upsampler_hidden_dim": args.upsampler_hidden_dim,
-        "upsampler_kernel_size": args.upsampler_kernel_size,
-        "upsampler_factor": 2,
-    })
+    config_dict.update(
+        {
+            "enable_48khz_upsampler": True,
+            "upsampler_hidden_dim": args.upsampler_hidden_dim,
+            "upsampler_kernel_size": args.upsampler_kernel_size,
+            "upsampler_factor": 2,
+        }
+    )
     decoder_config = Qwen3TTSTokenizer48kDecoderConfig(
         **config_dict,
     )
@@ -140,7 +218,7 @@ def create_model(args, accelerator):
 
     # Freeze 24kHz part, train only upsampler
     for name, param in decoder.named_parameters():
-        if 'upsampler' not in name:
+        if "upsampler" not in name:
             param.requires_grad = False
         else:
             param.requires_grad = True
@@ -149,7 +227,9 @@ def create_model(args, accelerator):
     # Display trainable parameter count
     trainable_params = sum(p.numel() for p in decoder.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in decoder.parameters())
-    accelerator.print(f"Trainable parameters: {trainable_params:,} / {total_params:,} ({trainable_params/total_params*100:.2f}%)")
+    accelerator.print(
+        f"Trainable parameters: {trainable_params:,} / {total_params:,} ({trainable_params/total_params*100:.2f}%)"
+    )
 
     return decoder
 
@@ -162,7 +242,7 @@ def train_step(
 ) -> dict:
     """Single training step"""
     audio_codes = batch["audio_codes"]  # (batch, seq_len, 16)
-    target_48k = batch["audio_48k"]     # (batch, samples)
+    target_48k = batch["audio_48k"]  # (batch, samples)
     lengths_48k = batch["audio_48k_lengths"]
 
     # Move tensors to device
@@ -184,7 +264,9 @@ def train_step(
     losses = loss_fn(pred_48k, target_48k, lengths_48k)
 
     # Add seq_len information
-    losses["seq_len"] = torch.tensor(total_seq_len, dtype=torch.float32, device=accelerator.device)
+    losses["seq_len"] = torch.tensor(
+        total_seq_len, dtype=torch.float32, device=accelerator.device
+    )
 
     return losses
 
@@ -255,8 +337,7 @@ def save_checkpoint(
     # Save only upsampler weights
     unwrapped_model = accelerator.unwrap_model(model)
     upsampler_state_dict = {
-        k: v.cpu() for k, v in unwrapped_model.state_dict().items()
-        if 'upsampler' in k
+        k: v.cpu() for k, v in unwrapped_model.state_dict().items() if "upsampler" in k
     }
 
     # Checkpoint name
@@ -282,12 +363,15 @@ def save_checkpoint(
         json.dump(config_dict, f, indent=2)
 
     # Save optimizer and scheduler state
-    torch.save({
-        "optimizer": optimizer.state_dict(),
-        "scheduler": scheduler.state_dict() if scheduler else None,
-        "step": step,
-        "epoch": epoch,
-    }, checkpoint_dir / "training_state.pt")
+    torch.save(
+        {
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict() if scheduler else None,
+            "step": step,
+            "epoch": epoch,
+        },
+        checkpoint_dir / "training_state.pt",
+    )
 
     accelerator.print(f"Saved checkpoint to {checkpoint_dir}")
 
@@ -364,7 +448,9 @@ def main():
         else:
             shard_pattern = path
 
-        accelerator.print(f"Loading validation data from WebDataset: {args.val_shards}...")
+        accelerator.print(
+            f"Loading validation data from WebDataset: {args.val_shards}..."
+        )
         val_dataloader = create_webdataset_loader(
             shard_pattern=shard_pattern,
             target_sample_rate=48000,
@@ -388,7 +474,11 @@ def main():
         total_steps = args.max_train_steps
     else:
         try:
-            total_steps = len(train_dataloader) * args.num_epochs // args.gradient_accumulation_steps
+            total_steps = (
+                len(train_dataloader)
+                * args.num_epochs
+                // args.gradient_accumulation_steps
+            )
         except TypeError:
             # For WebDataset, length cannot be obtained, so issue a warning
             accelerator.print(
@@ -522,40 +612,49 @@ def main():
                 )
 
             # Evaluation
-            if val_dataloader and global_step % args.eval_every == 0 and global_step > 0:
+            if (
+                val_dataloader
+                and global_step % args.eval_every == 0
+                and global_step > 0
+            ):
                 val_losses = eval_step(model, val_dataloader, loss_fn, accelerator)
                 accelerator.print(f"\nStep {global_step} - Validation losses:")
                 for k, v in val_losses.items():
                     accelerator.print(f"  {k}: {v:.4f}")
-                accelerator.log({f"val_{k}": v for k, v in val_losses.items()}, step=global_step)
+                accelerator.log(
+                    {f"val_{k}": v for k, v in val_losses.items()}, step=global_step
+                )
 
                 # Save best model
                 if val_losses["total_loss"] < best_val_loss:
                     best_val_loss = val_losses["total_loss"]
                     save_checkpoint(
-                        model, optimizer, scheduler, global_step, epoch,
-                        args, accelerator, is_best=True
+                        model,
+                        optimizer,
+                        scheduler,
+                        global_step,
+                        epoch,
+                        args,
+                        accelerator,
+                        is_best=True,
                     )
 
             # Save checkpoint
             if global_step % args.save_every == 0 and global_step > 0:
                 save_checkpoint(
-                    model, optimizer, scheduler, global_step, epoch,
-                    args, accelerator
+                    model, optimizer, scheduler, global_step, epoch, args, accelerator
                 )
 
             global_step += 1
 
         # Save checkpoint at end of epoch
         save_checkpoint(
-            model, optimizer, scheduler, global_step, epoch,
-            args, accelerator
+            model, optimizer, scheduler, global_step, epoch, args, accelerator
         )
 
     # Save final checkpoint
     save_checkpoint(
-        model, optimizer, scheduler, global_step, args.num_epochs,
-        args, accelerator
+        model, optimizer, scheduler, global_step, args.num_epochs, args, accelerator
     )
 
     accelerator.end_training()

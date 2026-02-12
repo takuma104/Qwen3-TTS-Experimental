@@ -176,7 +176,9 @@ class Qwen3TTSTokenizer48kHz:
         self.output_sample_rate = self.tokenizer.get_output_sample_rate()
         print(f"Model loaded. Output sample rate: {self.output_sample_rate} Hz")
 
-    def _load_base_with_upsampler(self, base_model_path: str, upsampler_checkpoint: str):
+    def _load_base_with_upsampler(
+        self, base_model_path: str, upsampler_checkpoint: str
+    ):
         """Load base model with added upsampler"""
         print(f"Loading base model from {base_model_path}...")
 
@@ -239,7 +241,9 @@ class Qwen3TTSTokenizer48kHz:
         upsampler_factor = upsampler_config.get("upsampler_factor", 2)
         original_rate = self.tokenizer.config.output_sample_rate
         new_output_rate = original_rate * upsampler_factor
-        new_decode_upsample_rate = self.tokenizer.config.decode_upsample_rate * upsampler_factor
+        new_decode_upsample_rate = (
+            self.tokenizer.config.decode_upsample_rate * upsampler_factor
+        )
 
         # Update config
         self.tokenizer.config.output_sample_rate = new_output_rate
@@ -250,7 +254,9 @@ class Qwen3TTSTokenizer48kHz:
         self.tokenizer.model.decode_upsample_rate = new_decode_upsample_rate
 
         self.output_sample_rate = new_output_rate
-        print(f"48kHz upsampler attached. Output sample rate: {self.output_sample_rate} Hz")
+        print(
+            f"48kHz upsampler attached. Output sample rate: {self.output_sample_rate} Hz"
+        )
 
     def encode(self, audio_path: str):
         """

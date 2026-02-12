@@ -194,6 +194,7 @@ class MelSpectrogramLoss(nn.Module):
 
     def _create_mel_filterbank(self) -> torch.Tensor:
         """Create mel filterbank"""
+
         # Hz to Mel
         def hz_to_mel(hz):
             return 2595 * torch.log10(1 + hz / 700)
@@ -306,7 +307,7 @@ class RMSLoss(nn.Module):
         frames = x_padded.unfold(dimension=-1, size=self.frame_size, step=self.hop_size)
 
         # RMS computation: sqrt(mean(x^2))
-        rms = torch.sqrt(torch.mean(frames ** 2, dim=-1) + 1e-8)
+        rms = torch.sqrt(torch.mean(frames**2, dim=-1) + 1e-8)
 
         return rms
 
@@ -360,11 +361,13 @@ class UpsamplerLoss(nn.Module):
         )
 
         # RMS loss (multiple resolutions)
-        self.rms_losses = nn.ModuleList([
-            RMSLoss(frame_size=512, hop_size=128),
-            RMSLoss(frame_size=2048, hop_size=512),
-            RMSLoss(frame_size=8192, hop_size=2048),
-        ])
+        self.rms_losses = nn.ModuleList(
+            [
+                RMSLoss(frame_size=512, hop_size=128),
+                RMSLoss(frame_size=2048, hop_size=512),
+                RMSLoss(frame_size=8192, hop_size=2048),
+            ]
+        )
 
         # Mel spectrogram loss
         self.mel_loss = MelSpectrogramLoss(
@@ -488,7 +491,7 @@ if __name__ == "__main__":
     loss_fn_partial = UpsamplerLoss(
         l1_weight=1.0,
         stft_weight=0.0,  # Skip
-        mel_weight=0.0,   # Skip
+        mel_weight=0.0,  # Skip
         rms_weight=1.0,
     )
 
@@ -509,5 +512,7 @@ if __name__ == "__main__":
     assert losses_partial["l1_loss"].item() > 0.0, "l1_loss should be > 0"
     assert losses_partial["rms_loss"].item() > 0.0, "rms_loss should be > 0"
 
-    print(f"\nSpeedup: {elapsed_all/elapsed_partial:.2f}x faster when skipping STFT & Mel")
+    print(
+        f"\nSpeedup: {elapsed_all/elapsed_partial:.2f}x faster when skipping STFT & Mel"
+    )
     print("\nAll tests passed!")

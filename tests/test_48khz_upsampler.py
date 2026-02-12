@@ -4,7 +4,8 @@
 
 import torch
 import sys
-sys.path.insert(0, '.')
+
+sys.path.insert(0, ".")
 
 from qwen_tts.core.tokenizer_12hz.configuration_qwen3_tts_tokenizer_v2 import (
     Qwen3TTSTokenizerV2Config,
@@ -43,12 +44,16 @@ def test_upsampler_block():
 
     print(f"  Input shape:  {x.shape}")
     print(f"  Output shape: {y.shape}")
-    print(f"  Expected output samples: ~{24000 * 2} (may vary slightly due to causal conv padding)")
+    print(
+        f"  Expected output samples: ~{24000 * 2} (may vary slightly due to causal conv padding)"
+    )
 
     # Allow small tolerance due to causal conv padding
     expected_min = 24000 * 2 - 10
     expected_max = 24000 * 2 + 10
-    assert expected_min <= y.shape[2] <= expected_max, f"Expected ~48000, got {y.shape[2]}"
+    assert (
+        expected_min <= y.shape[2] <= expected_max
+    ), f"Expected ~48000, got {y.shape[2]}"
     print("  [PASS] UpSamplerBlock test passed!")
     return True
 
@@ -182,7 +187,9 @@ def test_parameter_count():
     print(f"  24kHz decoder params: {params_24k:,}")
     print(f"  48kHz decoder params: {params_48k:,}")
     print(f"  Upsampler params:     {params_upsampler:,}")
-    print(f"  Overhead:             {(params_48k - params_24k) / params_24k * 100:.2f}%")
+    print(
+        f"  Overhead:             {(params_48k - params_24k) / params_24k * 100:.2f}%"
+    )
 
     return True
 

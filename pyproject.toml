@@ -38,6 +38,7 @@ dependencies = [
   "tensorboard>=2.20.0",
   "peft>=0.18.1",
   "datasets>=4.5.0",
+  "black>=26.1.0",
 ]
 
 [project.urls]

@@ -28,7 +28,9 @@ from qwen_tts.core.tokenizer_48k.modeling import Qwen3TTSTokenizer48kModel
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Merge upsampler weights into 48kHz model")
+    parser = argparse.ArgumentParser(
+        description="Merge upsampler weights into 48kHz model"
+    )
     parser.add_argument(
         "--base_model_path",
         type=str,
@@ -74,6 +76,7 @@ def main():
     else:
         # Download from Hugging Face Hub
         from huggingface_hub import hf_hub_download
+
         base_config_path = hf_hub_download(
             repo_id=args.base_model_path,
             filename="config.json",
@@ -85,8 +88,12 @@ def main():
     # Update decoder_config to add 48kHz settings
     decoder_config = config_dict.get("decoder_config", {})
     decoder_config["enable_48khz_upsampler"] = True
-    decoder_config["upsampler_hidden_dim"] = upsampler_config.get("upsampler_hidden_dim", 32)
-    decoder_config["upsampler_kernel_size"] = upsampler_config.get("upsampler_kernel_size", 4)
+    decoder_config["upsampler_hidden_dim"] = upsampler_config.get(
+        "upsampler_hidden_dim", 32
+    )
+    decoder_config["upsampler_kernel_size"] = upsampler_config.get(
+        "upsampler_kernel_size", 4
+    )
     decoder_config["upsampler_factor"] = upsampler_config.get("upsampler_factor", 2)
     config_dict["decoder_config"] = decoder_config
 
@@ -95,8 +102,12 @@ def main():
 
     # Update output_sample_rate and decode_upsample_rate
     upsampler_factor = decoder_config["upsampler_factor"]
-    config_dict["output_sample_rate"] = config_dict.get("output_sample_rate", 24000) * upsampler_factor
-    config_dict["decode_upsample_rate"] = config_dict.get("decode_upsample_rate", 1920) * upsampler_factor
+    config_dict["output_sample_rate"] = (
+        config_dict.get("output_sample_rate", 24000) * upsampler_factor
+    )
+    config_dict["decode_upsample_rate"] = (
+        config_dict.get("decode_upsample_rate", 1920) * upsampler_factor
+    )
 
     # Save new config.json
     output_config_path = output_path / "config.json"
@@ -112,6 +123,7 @@ def main():
             base_model_files = list(Path(args.base_model_path).glob("*.bin"))
     else:
         from huggingface_hub import hf_hub_download
+
         # Download model.safetensors
         model_file = hf_hub_download(
             repo_id=args.base_model_path,
@@ -159,6 +171,7 @@ def main():
         else:
             try:
                 from huggingface_hub import hf_hub_download
+
                 src_path = hf_hub_download(
                     repo_id=args.base_model_path,
                     filename=filename,
@@ -181,12 +194,18 @@ def main():
         print(f"Model loaded successfully!")
         print(f"  output_sample_rate: {model.config.output_sample_rate}")
         print(f"  decode_upsample_rate: {model.config.decode_upsample_rate}")
-        print(f"  enable_48khz_upsampler: {model.config.decoder_config.enable_48khz_upsampler}")
+        print(
+            f"  enable_48khz_upsampler: {model.config.decoder_config.enable_48khz_upsampler}"
+        )
         print(f"  upsampler: {model.decoder.upsampler is not None}")
 
         # Parameter count
         total_params = sum(p.numel() for p in model.parameters())
-        upsampler_params = sum(p.numel() for p in model.decoder.upsampler.parameters()) if model.decoder.upsampler else 0
+        upsampler_params = (
+            sum(p.numel() for p in model.decoder.upsampler.parameters())
+            if model.decoder.upsampler
+            else 0
+        )
         print(f"  Total parameters: {total_params:,}")
         print(f"  Upsampler parameters: {upsampler_params:,}")
 

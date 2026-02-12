@@ -51,10 +51,10 @@ def collate_fn(batch: List[dict]) -> dict:
         audio_24k_lengths[i] = samples_24k
 
     return {
-        "audio_codes": audio_codes,           # (batch, max_codes, 16)
-        "audio_48k": audio_48k,               # (batch, max_samples_48k)
-        "audio_24k": audio_24k,               # (batch, max_samples_24k)
-        "code_lengths": code_lengths,         # (batch,)
+        "audio_codes": audio_codes,  # (batch, max_codes, 16)
+        "audio_48k": audio_48k,  # (batch, max_samples_48k)
+        "audio_24k": audio_24k,  # (batch, max_samples_24k)
+        "code_lengths": code_lengths,  # (batch,)
         "audio_48k_lengths": audio_48k_lengths,  # (batch,)
         "audio_24k_lengths": audio_24k_lengths,  # (batch,)
     }
@@ -94,7 +94,7 @@ def create_webdataset_loader(
         audio_codes = sample["npy"]  # numpy array of shape (seq_len, 16)
         assert isinstance(audio_codes, np.ndarray), "audio_codes must be a numpy array"
         assert audio_codes.ndim == 1
-        audio_codes = audio_codes.reshape(-1, 16) # (seq_len, 16)
+        audio_codes = audio_codes.reshape(-1, 16)  # (seq_len, 16)
         audio_codes = torch.from_numpy(audio_codes).long()
         num_codes = audio_codes.shape[0]
 
@@ -137,7 +137,9 @@ def create_webdataset_loader(
 
         # Resample to target (48kHz)
         if sr != target_sample_rate:
-            audio_48k = librosa.resample(audio, orig_sr=sr, target_sr=target_sample_rate)
+            audio_48k = librosa.resample(
+                audio, orig_sr=sr, target_sr=target_sample_rate
+            )
         else:
             audio_48k = audio
 
@@ -153,8 +155,8 @@ def create_webdataset_loader(
 
         return {
             "audio_codes": audio_codes,  # (seq_len, 16)
-            "audio_48k": audio_48k,      # (samples_48k,)
-            "audio_24k": audio_24k,      # (samples_24k,)
+            "audio_48k": audio_48k,  # (samples_48k,)
+            "audio_24k": audio_24k,  # (samples_24k,)
         }
 
     # Build WebDataset
@@ -167,9 +169,9 @@ def create_webdataset_loader(
     )
 
     # Batching with WebLoader
-    loader = wds.WebLoader(
-        dataset, batch_size=None, num_workers=num_workers
-    ).batched(batch_size, collation_fn=collate_fn)
+    loader = wds.WebLoader(dataset, batch_size=None, num_workers=num_workers).batched(
+        batch_size, collation_fn=collate_fn
+    )
 
     return loader
 

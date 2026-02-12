@@ -56,23 +56,35 @@ class UpSamplerBlock(nn.Module):
             stride=upsample_factor,
         )
 
-        self.residual_blocks = nn.ModuleList([
-            nn.Sequential(
-                SnakeBeta(hidden_dim),
-                Qwen3TTSTokenizerV2CausalConvNet(hidden_dim, hidden_dim, kernel_size=7, dilation=1),
-                SnakeBeta(hidden_dim),
-                Qwen3TTSTokenizerV2CausalConvNet(hidden_dim, hidden_dim, kernel_size=1),
-            ),
-            nn.Sequential(
-                SnakeBeta(hidden_dim),
-                Qwen3TTSTokenizerV2CausalConvNet(hidden_dim, hidden_dim, kernel_size=7, dilation=3),
-                SnakeBeta(hidden_dim),
-                Qwen3TTSTokenizerV2CausalConvNet(hidden_dim, hidden_dim, kernel_size=1),
-            ),
-        ])
+        self.residual_blocks = nn.ModuleList(
+            [
+                nn.Sequential(
+                    SnakeBeta(hidden_dim),
+                    Qwen3TTSTokenizerV2CausalConvNet(
+                        hidden_dim, hidden_dim, kernel_size=7, dilation=1
+                    ),
+                    SnakeBeta(hidden_dim),
+                    Qwen3TTSTokenizerV2CausalConvNet(
+                        hidden_dim, hidden_dim, kernel_size=1
+                    ),
+                ),
+                nn.Sequential(
+                    SnakeBeta(hidden_dim),
+                    Qwen3TTSTokenizerV2CausalConvNet(
+                        hidden_dim, hidden_dim, kernel_size=7, dilation=3
+                    ),
+                    SnakeBeta(hidden_dim),
+                    Qwen3TTSTokenizerV2CausalConvNet(
+                        hidden_dim, hidden_dim, kernel_size=1
+                    ),
+                ),
+            ]
+        )
 
         self.output_act = SnakeBeta(hidden_dim)
-        self.output_conv = Qwen3TTSTokenizerV2CausalConvNet(hidden_dim, in_channels, kernel_size=7)
+        self.output_conv = Qwen3TTSTokenizerV2CausalConvNet(
+            hidden_dim, in_channels, kernel_size=7
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -99,7 +111,7 @@ class Qwen3TTSTokenizer48kDecoder(Qwen3TTSTokenizerV2Decoder):
         super().__init__(config)
 
         self.upsampler = None
-        if getattr(config, 'enable_48khz_upsampler', False):
+        if getattr(config, "enable_48khz_upsampler", False):
             self.upsampler = UpSamplerBlock(
                 in_channels=1,
                 hidden_dim=config.upsampler_hidden_dim,
@@ -107,7 +119,8 @@ class Qwen3TTSTokenizer48kDecoder(Qwen3TTSTokenizerV2Decoder):
                 upsample_factor=config.upsampler_factor,
             )
             self.total_upsample = int(
-                np.prod(config.upsample_rates + config.upsampling_ratios) * config.upsampler_factor
+                np.prod(config.upsample_rates + config.upsampling_ratios)
+                * config.upsampler_factor
             )
 
     def forward(self, codes):
@@ -130,7 +143,13 @@ class Qwen3TTSTokenizer48kModel(Qwen3TTSTokenizerV2Model):
     def __init__(self, config: Qwen3TTSTokenizer48kConfig):
         super().__init__(config)
         # Replace decoder with 48k version
-        self.decoder = Qwen3TTSTokenizer48kDecoder._from_config(self.config.decoder_config)
+        self.decoder = Qwen3TTSTokenizer48kDecoder._from_config(
+            self.config.decoder_config
+        )
 
 
-__all__ = ["Qwen3TTSTokenizer48kModel", "Qwen3TTSTokenizer48kPreTrainedModel", "UpSamplerBlock"]
+__all__ = [
+    "Qwen3TTSTokenizer48kModel",
+    "Qwen3TTSTokenizer48kPreTrainedModel",
+    "UpSamplerBlock",
+]

@@ -94,13 +94,20 @@ class Qwen3TTSTokenizer48kConfig(Qwen3TTSTokenizerV2Config):
 
         # Call grandparent __init__ to skip Qwen3TTSTokenizerV2Config's decoder instantiation
         from transformers.configuration_utils import PretrainedConfig
+
         PretrainedConfig.__init__(self, **kwargs)
 
         if encoder_config is None:
             encoder_config = {}
-            logger.info("encoder_config is None. Initializing encoder with default values")
+            logger.info(
+                "encoder_config is None. Initializing encoder with default values"
+            )
 
-        self.encoder_config = MimiConfig(**encoder_config) if isinstance(encoder_config, dict) else encoder_config
+        self.encoder_config = (
+            MimiConfig(**encoder_config)
+            if isinstance(encoder_config, dict)
+            else encoder_config
+        )
         self.decoder_config = self._48k_decoder_config
 
         self.encoder_valid_num_quantizers = encoder_valid_num_quantizers
