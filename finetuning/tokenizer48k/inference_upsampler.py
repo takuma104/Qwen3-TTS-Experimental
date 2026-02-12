@@ -42,12 +42,7 @@ from safetensors.torch import load_file
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from qwen_tts import Qwen3TTSTokenizer
-from qwen_tts.core.tokenizer_12hz.configuration_qwen3_tts_tokenizer_v2 import (
-    Qwen3TTSTokenizerV2DecoderConfig,
-)
-from qwen_tts.core.tokenizer_12hz.modeling_qwen3_tts_tokenizer_v2 import (
-    UpSamplerBlock,
-)
+from qwen_tts.core.tokenizer_48k.modeling import UpSamplerBlock
 
 
 def parse_args():

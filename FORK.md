@@ -2,7 +2,9 @@
 
 ## 概要
 
-Qwen3-TTS-Tokenizer-12Hz のデコーダー（`Qwen3TTSTokenizerV2Decoder`）に48kHzアップサンプリング機能を追加しました。XCodec2の44.1kHz実装を参考に、既存の24kHz出力の後段に`UpSamplerBlock`を追加する方式を採用しています。
+Qwen3-TTS-Tokenizer-12Hz のデコーダーを拡張し、48kHzアップサンプリング機能を追加しました。XCodec2の44.1kHz実装を参考に、既存の24kHz出力の後段に`UpSamplerBlock`を追加する方式を採用しています。
+
+48kHz関連のコードは `qwen_tts/core/tokenizer_48k/` に独立して配置し、12Hzトークナイザーのクラスをサブクラスで拡張する構成です。これにより upstream の12Hzトークナイザー更新とのコンフリクトを回避しています。
 
 ## アーキテクチャ
 
@@ -22,22 +24,42 @@ UpSamplerBlock
 └── CausalConvNet (hidden_dim → 1)  # 出力層
 ```
 
-## 変更ファイル
+## ファイル構成
 
-| ファイル | 変更内容 |
-|----------|----------|
-| `qwen_tts/core/tokenizer_12hz/configuration_qwen3_tts_tokenizer_v2.py` | 48kHz関連の設定パラメータ追加 |
-| `qwen_tts/core/tokenizer_12hz/modeling_qwen3_tts_tokenizer_v2.py` | `UpSamplerBlock`クラス追加、デコーダー修正 |
+### 48kHz コアモジュール（新規）
+
+| ファイル | 内容 |
+|----------|------|
+| `qwen_tts/core/tokenizer_48k/configuration.py` | `Qwen3TTSTokenizer48kConfig`, `Qwen3TTSTokenizer48kDecoderConfig`（12Hz のサブクラス） |
+| `qwen_tts/core/tokenizer_48k/modeling.py` | `UpSamplerBlock`, `Qwen3TTSTokenizer48kDecoder`, `Qwen3TTSTokenizer48kModel` |
+
+### 学習・推論スクリプト
+
+| ファイル | 説明 |
+|----------|------|
+| `finetuning/tokenizer48k/train_upsampler.py` | 学習スクリプト（JSONL/WebDataset対応） |
+| `finetuning/tokenizer48k/upsampler_dataset.py` | 学習用データセットクラス |
+| `finetuning/tokenizer48k/upsampler_losses.py` | 損失関数（L1 + Multi-resolution STFT + Mel + RMS） |
+| `finetuning/tokenizer48k/merge_upsampler.py` | 学習済みアップサンプラーをマージするユーティリティ |
+| `finetuning/tokenizer48k/inference_upsampler.py` | 推論スクリプト |
 | `tests/test_48khz_upsampler.py` | テストスクリプト |
-| `docs/48kHz_upsampler_plan.md` | 設計ドキュメント |
+
+### クラス継承構造
+
+```
+Qwen3TTSTokenizerV2DecoderConfig  →  Qwen3TTSTokenizer48kDecoderConfig
+Qwen3TTSTokenizerV2Config         →  Qwen3TTSTokenizer48kConfig
+Qwen3TTSTokenizerV2Decoder        →  Qwen3TTSTokenizer48kDecoder (+ UpSamplerBlock)
+Qwen3TTSTokenizerV2Model          →  Qwen3TTSTokenizer48kModel
+```
 
 ## 追加された設定パラメータ
 
-### Qwen3TTSTokenizerV2DecoderConfig
+### Qwen3TTSTokenizer48kDecoderConfig
 
 | パラメータ | デフォルト | 説明 |
 |-----------|-----------|------|
-| `enable_48khz_upsampler` | `False` | 48kHzアップサンプラーを有効化 |
+| `enable_48khz_upsampler` | `True` | 48kHzアップサンプラーを有効化 |
 | `upsampler_hidden_dim` | `32` | アップサンプラーの隠れ層次元 |
 | `upsampler_kernel_size` | `4` | 転置畳み込みのカーネルサイズ |
 | `upsampler_factor` | `2` | アップサンプリング倍率 |
@@ -54,13 +76,11 @@ UpSamplerBlock
 ### 48kHzモードでモデルを初期化
 
 ```python
-from qwen_tts.core.tokenizer_12hz import (
-    Qwen3TTSTokenizerV2Config,
-    Qwen3TTSTokenizerV2Model,
-)
+from qwen_tts.core.tokenizer_48k.configuration import Qwen3TTSTokenizer48kConfig
+from qwen_tts.core.tokenizer_48k.modeling import Qwen3TTSTokenizer48kModel
 
 # 48kHz設定でコンフィグ作成
-config = Qwen3TTSTokenizerV2Config(
+config = Qwen3TTSTokenizer48kConfig(
     decoder_config={
         "enable_48khz_upsampler": True,
         "upsampler_hidden_dim": 32,
@@ -68,30 +88,16 @@ config = Qwen3TTSTokenizerV2Config(
 )
 
 # モデル初期化
-model = Qwen3TTSTokenizerV2Model(config)
+model = Qwen3TTSTokenizer48kModel(config)
 ```
 
-### 既存モデルから48kHz化
+### マージ済み48kHzモデルをロード
 
 ```python
-from transformers import AutoModel
-from qwen_tts.core.tokenizer_12hz.modeling_qwen3_tts_tokenizer_v2 import UpSamplerBlock
+from qwen_tts import Qwen3TTSTokenizer
 
-# 24kHzモデルをロード
-model = AutoModel.from_pretrained("Qwen/Qwen3-TTS-Tokenizer-12Hz")
-
-# アップサンプラーを追加
-model.decoder.upsampler = UpSamplerBlock(
-    in_channels=1,
-    hidden_dim=32,
-    kernel_size=4,
-    upsample_factor=2,
-)
-model.decoder.total_upsample *= 2
-
-# config更新
-model.config.output_sample_rate = 48000
-model.config.decode_upsample_rate = 3840
+# model_type: "qwen3_tts_tokenizer_48k" の config.json を持つモデルを自動検出
+tokenizer = Qwen3TTSTokenizer.from_pretrained("output/Qwen3-TTS-Tokenizer-12Hz-48kHz")
 ```
 
 ### 学習時の凍結設定
@@ -163,17 +169,6 @@ All tests passed!
 ---
 
 ## アップサンプラー学習
-
-### 必要なファイル
-
-| ファイル | 説明 |
-|----------|------|
-| `dataset/parquet_to_webdataset.py` | Parquet → WebDataset 変換スクリプト |
-| `finetuning/tokenizer48k/upsampler_dataset.py` | 学習用データセットクラス（JSONL/WebDataset対応） |
-| `finetuning/tokenizer48k/upsampler_losses.py` | 損失関数（L1 + Multi-resolution STFT + Mel + RMS） |
-| `finetuning/tokenizer48k/train_upsampler.py` | 学習スクリプト（JSONL/WebDataset対応） |
-| `finetuning/tokenizer48k/merge_upsampler.py` | 学習済みアップサンプラーをマージするユーティリティ |
-| `finetuning/tokenizer48k/inference_upsampler.py` | 推論スクリプト（48kHzモデルの復元と音声生成） |
 
 ### データ形式
 
@@ -405,7 +400,7 @@ sf.write("output_48k.wav", wav, sr)
 
 ```json
 {
-  "model_type": "qwen3_tts_tokenizer_12hz",
+  "model_type": "qwen3_tts_tokenizer_48k",
   "input_sample_rate": 24000,
   "output_sample_rate": 48000,
   "decode_upsample_rate": 3840,

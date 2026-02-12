@@ -12,6 +12,13 @@ from qwen_tts.core.tokenizer_12hz.configuration_qwen3_tts_tokenizer_v2 import (
 )
 from qwen_tts.core.tokenizer_12hz.modeling_qwen3_tts_tokenizer_v2 import (
     Qwen3TTSTokenizerV2Decoder,
+)
+from qwen_tts.core.tokenizer_48k.configuration import (
+    Qwen3TTSTokenizer48kConfig,
+    Qwen3TTSTokenizer48kDecoderConfig,
+)
+from qwen_tts.core.tokenizer_48k.modeling import (
+    Qwen3TTSTokenizer48kDecoder,
     UpSamplerBlock,
 )
 
@@ -53,11 +60,9 @@ def test_decoder_config_24khz():
 
     config = Qwen3TTSTokenizerV2Config()
 
-    print(f"  enable_48khz_upsampler: {config.decoder_config.enable_48khz_upsampler}")
     print(f"  output_sample_rate: {config.output_sample_rate}")
     print(f"  decode_upsample_rate: {config.decode_upsample_rate}")
 
-    assert config.decoder_config.enable_48khz_upsampler == False
     assert config.output_sample_rate == 24000
     assert config.decode_upsample_rate == 1920
     print("  [PASS] 24kHz config test passed!")
@@ -76,7 +81,7 @@ def test_decoder_config_48khz():
         "upsampler_factor": 2,
     }
 
-    config = Qwen3TTSTokenizerV2Config(decoder_config=decoder_config)
+    config = Qwen3TTSTokenizer48kConfig(decoder_config=decoder_config)
 
     print(f"  enable_48khz_upsampler: {config.decoder_config.enable_48khz_upsampler}")
     print(f"  output_sample_rate: {config.output_sample_rate}")
@@ -98,9 +103,7 @@ def test_decoder_24khz():
     decoder = Qwen3TTSTokenizerV2Decoder(config)
 
     print(f"  total_upsample: {decoder.total_upsample}")
-    print(f"  upsampler: {decoder.upsampler}")
 
-    assert decoder.upsampler is None
     assert decoder.total_upsample == 1920  # 2*2*8*5*4*3 = 1920
 
     # ダミー入力でforward
@@ -127,13 +130,13 @@ def test_decoder_48khz():
     print("=" * 50)
     print("Testing 48kHz decoder...")
 
-    config = Qwen3TTSTokenizerV2DecoderConfig(
+    config = Qwen3TTSTokenizer48kDecoderConfig(
         enable_48khz_upsampler=True,
         upsampler_hidden_dim=32,
         upsampler_kernel_size=4,
         upsampler_factor=2,
     )
-    decoder = Qwen3TTSTokenizerV2Decoder(config)
+    decoder = Qwen3TTSTokenizer48kDecoder(config)
 
     print(f"  total_upsample: {decoder.total_upsample}")
     print(f"  upsampler: {decoder.upsampler is not None}")
@@ -166,11 +169,11 @@ def test_parameter_count():
     config_24k = Qwen3TTSTokenizerV2DecoderConfig()
     decoder_24k = Qwen3TTSTokenizerV2Decoder(config_24k)
 
-    config_48k = Qwen3TTSTokenizerV2DecoderConfig(
+    config_48k = Qwen3TTSTokenizer48kDecoderConfig(
         enable_48khz_upsampler=True,
         upsampler_hidden_dim=32,
     )
-    decoder_48k = Qwen3TTSTokenizerV2Decoder(config_48k)
+    decoder_48k = Qwen3TTSTokenizer48kDecoder(config_48k)
 
     params_24k = sum(p.numel() for p in decoder_24k.parameters())
     params_48k = sum(p.numel() for p in decoder_48k.parameters())

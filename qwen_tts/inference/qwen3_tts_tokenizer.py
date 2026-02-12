@@ -31,6 +31,8 @@ from ..core import (
     Qwen3TTSTokenizerV1Model,
     Qwen3TTSTokenizerV2Config,
     Qwen3TTSTokenizerV2Model,
+    Qwen3TTSTokenizer48kConfig,
+    Qwen3TTSTokenizer48kModel,
 )
 
 AudioInput = Union[
@@ -83,6 +85,9 @@ class Qwen3TTSTokenizer:
 
         AutoConfig.register("qwen3_tts_tokenizer_12hz", Qwen3TTSTokenizerV2Config)
         AutoModel.register(Qwen3TTSTokenizerV2Config, Qwen3TTSTokenizerV2Model)
+
+        AutoConfig.register("qwen3_tts_tokenizer_48k", Qwen3TTSTokenizer48kConfig)
+        AutoModel.register(Qwen3TTSTokenizer48kConfig, Qwen3TTSTokenizer48kModel)
 
         inst.feature_extractor = AutoFeatureExtractor.from_pretrained(pretrained_model_name_or_path)
         inst.model = AutoModel.from_pretrained(pretrained_model_name_or_path, **kwargs)
@@ -354,7 +359,7 @@ class Qwen3TTSTokenizer:
                 dec = self.model.decode(audio_codes_padded, xvectors_batch, ref_mels_padded, return_dict=True)
                 wav_tensors = dec.audio_values
 
-            elif model_type == "qwen3_tts_tokenizer_12hz":
+            elif model_type in ("qwen3_tts_tokenizer_12hz", "qwen3_tts_tokenizer_48k"):
                 dec = self.model.decode(audio_codes_padded, return_dict=True)
                 wav_tensors = dec.audio_values
 

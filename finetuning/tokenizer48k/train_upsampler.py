@@ -51,14 +51,8 @@ from finetuning.tokenizer48k.upsampler_dataset import (
     create_webdataset_loader,
 )
 from finetuning.tokenizer48k.upsampler_losses import UpsamplerLoss
-from qwen_tts.core.tokenizer_12hz.configuration_qwen3_tts_tokenizer_v2 import (
-    Qwen3TTSTokenizerV2Config,
-    Qwen3TTSTokenizerV2DecoderConfig,
-)
-from qwen_tts.core.tokenizer_12hz.modeling_qwen3_tts_tokenizer_v2 import (
-    Qwen3TTSTokenizerV2Decoder,
-    UpSamplerBlock,
-)
+from qwen_tts.core.tokenizer_48k.configuration import Qwen3TTSTokenizer48kDecoderConfig
+from qwen_tts.core.tokenizer_48k.modeling import Qwen3TTSTokenizer48kDecoder
 
 from qwen_tts import Qwen3TTSTokenizer
 
@@ -147,10 +141,10 @@ def create_model(args, accelerator):
         "upsampler_kernel_size": args.upsampler_kernel_size,
         "upsampler_factor": 2,
     })
-    decoder_config = Qwen3TTSTokenizerV2DecoderConfig(
+    decoder_config = Qwen3TTSTokenizer48kDecoderConfig(
         **config_dict,
     )
-    decoder = Qwen3TTSTokenizerV2Decoder(decoder_config)
+    decoder = Qwen3TTSTokenizer48kDecoder(decoder_config)
 
     # 24kHz部分の重みをコピー
     missing_keys, unexpected_keys = decoder.load_state_dict(

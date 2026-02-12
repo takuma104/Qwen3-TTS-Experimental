@@ -23,12 +23,8 @@ from safetensors.torch import load_file, save_file
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from qwen_tts.core.tokenizer_12hz.configuration_qwen3_tts_tokenizer_v2 import (
-    Qwen3TTSTokenizerV2Config,
-)
-from qwen_tts.core.tokenizer_12hz.modeling_qwen3_tts_tokenizer_v2 import (
-    Qwen3TTSTokenizerV2Model,
-)
+from qwen_tts.core.tokenizer_48k.configuration import Qwen3TTSTokenizer48kConfig
+from qwen_tts.core.tokenizer_48k.modeling import Qwen3TTSTokenizer48kModel
 
 
 def parse_args():
@@ -93,6 +89,9 @@ def main():
     decoder_config["upsampler_kernel_size"] = upsampler_config.get("upsampler_kernel_size", 4)
     decoder_config["upsampler_factor"] = upsampler_config.get("upsampler_factor", 2)
     config_dict["decoder_config"] = decoder_config
+
+    # model_type を 48k に更新
+    config_dict["model_type"] = "qwen3_tts_tokenizer_48k"
 
     # output_sample_rate と decode_upsample_rate を更新
     upsampler_factor = decoder_config["upsampler_factor"]
@@ -175,7 +174,7 @@ def main():
     # モデルをテストロード
     print("\nTesting model load...")
     try:
-        model = Qwen3TTSTokenizerV2Model.from_pretrained(
+        model = Qwen3TTSTokenizer48kModel.from_pretrained(
             str(output_path),
             trust_remote_code=True,
         )
