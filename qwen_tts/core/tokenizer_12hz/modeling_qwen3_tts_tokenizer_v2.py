@@ -658,6 +658,71 @@ class Qwen3TTSTokenizerV2DecoderDecoderBlock(Qwen3TTSTokenizerV2DecoderPreTraine
         return hidden
 
 
+class UpSamplerBlock(nn.Module):
+    """
+    24kHz → 48kHz アップサンプリングブロック
+    XCodec2の44.1kHz実装を参考に、TransposedConv + 残差ブロック構成
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        hidden_dim: int = 32,
+        kernel_size: int = 4,
+        upsample_factor: int = 2,
+    ):
+        super().__init__()
+        self.upsample_factor = upsample_factor
+
+        # アップサンプリング用の転置畳み込み
+        self.upsample_conv = Qwen3TTSTokenizerV2CausalTransConvNet(
+            in_channels=in_channels,
+            out_channels=hidden_dim,
+            kernel_size=kernel_size,
+            stride=upsample_factor,
+        )
+
+        # 品質向上のための残差ブロック
+        self.residual_blocks = nn.ModuleList([
+            nn.Sequential(
+                SnakeBeta(hidden_dim),
+                Qwen3TTSTokenizerV2CausalConvNet(hidden_dim, hidden_dim, kernel_size=7, dilation=1),
+                SnakeBeta(hidden_dim),
+                Qwen3TTSTokenizerV2CausalConvNet(hidden_dim, hidden_dim, kernel_size=1),
+            ),
+            nn.Sequential(
+                SnakeBeta(hidden_dim),
+                Qwen3TTSTokenizerV2CausalConvNet(hidden_dim, hidden_dim, kernel_size=7, dilation=3),
+                SnakeBeta(hidden_dim),
+                Qwen3TTSTokenizerV2CausalConvNet(hidden_dim, hidden_dim, kernel_size=1),
+            ),
+        ])
+
+        # 出力層
+        self.output_act = SnakeBeta(hidden_dim)
+        self.output_conv = Qwen3TTSTokenizerV2CausalConvNet(hidden_dim, in_channels, kernel_size=7)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: [batch, channels, samples_24k]
+        Returns:
+            [batch, channels, samples_48k]
+        """
+        # アップサンプリング
+        x = self.upsample_conv(x)
+
+        # 残差ブロック
+        for block in self.residual_blocks:
+            x = x + block(x)
+
+        # 出力
+        x = self.output_act(x)
+        x = self.output_conv(x)
+
+        return x
+
+
 class EuclideanCodebook(nn.Module):
     def __init__(
         self,
@@ -864,6 +929,17 @@ class Qwen3TTSTokenizerV2Decoder(Qwen3TTSTokenizerV2DecoderPreTrainedModel):
         ]
         self.decoder = nn.ModuleList(decoder)
 
+        # 48kHz アップサンプラー（オプション）
+        self.upsampler = None
+        if getattr(config, 'enable_48khz_upsampler', False):
+            self.upsampler = UpSamplerBlock(
+                in_channels=1,
+                hidden_dim=getattr(config, 'upsampler_hidden_dim', 32),
+                kernel_size=getattr(config, 'upsampler_kernel_size', 4),
+                upsample_factor=getattr(config, 'upsampler_factor', 2),
+            )
+            self.total_upsample = self.total_upsample * config.upsampler_factor
+
         self.post_init()
 
     def forward(self, codes):
@@ -881,7 +957,14 @@ class Qwen3TTSTokenizerV2Decoder(Qwen3TTSTokenizerV2DecoderPreTrainedModel):
         wav = hidden
         for block in self.decoder:
             wav = block(wav)
-        return wav.clamp(min=-1, max=1)
+        wav = wav.clamp(min=-1, max=1)
+
+        # 48kHz アップサンプリング
+        if self.upsampler is not None:
+            wav = self.upsampler(wav)
+            wav = wav.clamp(min=-1, max=1)
+
+        return wav
 
     def chunked_decode(self, codes, chunk_size=300, left_context_size=25):
         wavs = []

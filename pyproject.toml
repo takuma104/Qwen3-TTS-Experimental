@@ -7,7 +7,7 @@ name = "qwen-tts"
 version = "0.1.1"
 description = "Qwen-TTS python package"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.9",
@@ -29,6 +29,15 @@ dependencies = [
   "sox",
   "onnxruntime",
   "einops",
+  "ipykernel",
+  "ipywidgets",
+  "flash-attn; sys_platform == 'linux'",
+  "pyarrow>=23.0.0",
+  "webdataset>=1.0.2",
+  "wandb>=0.24.1",
+  "tensorboard>=2.20.0",
+  "peft>=0.18.1",
+  "datasets>=4.5.0",
 ]
 
 [project.urls]
@@ -44,3 +53,6 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 qwen_tts = ["py.typed", "**/*.npz"]
+
+[tool.uv]
+no-build-isolation-package = ["flash-attn"]

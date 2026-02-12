@@ -33,6 +33,8 @@ class Qwen3TTSTokenizerV2DecoderConfig(PretrainedConfig):
     Args:
         codebook_size (`int`, *optional*, defaults to 2048):
             Number of entries in each residual codebook used for acoustic token quantization.
+        codebook_dim (`int`, *optional*, defaults to 128):
+            Dimensionality of each codebook vector.
         hidden_size (`int`, *optional*, defaults to 1024):
             Dimensionality of the hidden states and embeddings in the autoregressive transformer decoder.
         max_position_embeddings (`int`, *optional*, defaults to 8000):
@@ -67,11 +69,20 @@ class Qwen3TTSTokenizerV2DecoderConfig(PretrainedConfig):
             Final dimensionality of the decoder's output before waveform generation.
         attention_dropout (`float`, *optional*, defaults to 0.0):
             Dropout probability applied to attention weights in the decoder.
+        enable_48khz_upsampler (`bool`, *optional*, defaults to `False`):
+            Whether to enable the 48kHz upsampler block for 24kHz to 48kHz upsampling.
+        upsampler_hidden_dim (`int`, *optional*, defaults to 32):
+            Hidden dimension for the upsampler block.
+        upsampler_kernel_size (`int`, *optional*, defaults to 4):
+            Kernel size for the upsampler transposed convolution.
+        upsampler_factor (`int`, *optional*, defaults to 2):
+            Upsampling factor (2 for 24kHz to 48kHz).
     """
 
     def __init__(
         self,
         codebook_size=2048,
+        codebook_dim=128,
         hidden_size=1024,
         latent_dim=1024,
         max_position_embeddings=8000,
@@ -90,10 +101,15 @@ class Qwen3TTSTokenizerV2DecoderConfig(PretrainedConfig):
         upsampling_ratios=(2, 2),
         decoder_dim=1536,
         attention_dropout=0.0,
+        enable_48khz_upsampler=False,
+        upsampler_hidden_dim=32,
+        upsampler_kernel_size=4,
+        upsampler_factor=2,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.codebook_size = codebook_size
+        self.codebook_dim = codebook_dim
         self.hidden_size = hidden_size
         self.latent_dim = latent_dim
         self.max_position_embeddings = max_position_embeddings
@@ -112,6 +128,10 @@ class Qwen3TTSTokenizerV2DecoderConfig(PretrainedConfig):
         self.upsampling_ratios = upsampling_ratios
         self.decoder_dim = decoder_dim
         self.attention_dropout = attention_dropout
+        self.enable_48khz_upsampler = enable_48khz_upsampler
+        self.upsampler_hidden_dim = upsampler_hidden_dim
+        self.upsampler_kernel_size = upsampler_kernel_size
+        self.upsampler_factor = upsampler_factor
 
     @property
     def layer_types(self):
@@ -164,9 +184,16 @@ class Qwen3TTSTokenizerV2Config(PretrainedConfig):
 
         self.encoder_valid_num_quantizers = encoder_valid_num_quantizers
         self.input_sample_rate = input_sample_rate
-        self.output_sample_rate = output_sample_rate
-        self.decode_upsample_rate = decode_upsample_rate
         self.encode_downsample_rate = encode_downsample_rate
+
+        # 48kHz アップサンプラーが有効な場合、出力サンプルレートとdecode_upsample_rateを自動調整
+        if self.decoder_config.enable_48khz_upsampler:
+            upsampler_factor = self.decoder_config.upsampler_factor
+            self.output_sample_rate = output_sample_rate * upsampler_factor
+            self.decode_upsample_rate = decode_upsample_rate * upsampler_factor
+        else:
+            self.output_sample_rate = output_sample_rate
+            self.decode_upsample_rate = decode_upsample_rate
 
 
 __all__ = ["Qwen3TTSTokenizerV2Config", "Qwen3TTSTokenizerV2DecoderConfig"]
