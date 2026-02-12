@@ -1,6 +1,5 @@
 #!/bin/sh
 
-#source ../.venv/bin/activate
 uv run accelerate launch train_upsampler.py \
     --train_shards ".../train/*.tar" \
     --val_shards ".../val/*.tar" \

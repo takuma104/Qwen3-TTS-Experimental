@@ -172,22 +172,9 @@ All tests passed!
 
 ### データ形式（WebDataset）
 
-`dataset/parquet_to_webdataset.py` で Parquet から変換した tar アーカイブ形式。
-大規模データセットに推奨。
-
-各サンプルは以下のキーを持つ:
-- `{filetype}`: 音声データのバイナリ（wav, mp3 など）
+[WebDataset](https://github.com/webdataset/webdataset)形式で用意します。各サンプルは以下のキーを持つ必要があります:
+- `{filetype}`: 音声データのバイナリ（.flac, .wav, .mp3 など）
 - `npy`: audio_codes の numpy 配列（uint16、shape: [seq_len, 16]）
-- `json`: メタデータ（row_id, speaker, transcribe など）
-- `txt`: transcribe のテキスト
-
-変換方法:
-```bash
-python dataset/parquet_to_webdataset.py \
-    audio_parquet_dir/ \
-    codes_parquet_dir/ \
-    output_wds_dir/
-```
 
 ### 学習の実行
 
@@ -212,6 +199,11 @@ accelerate launch finetuning/tokenizer48k/train_upsampler.py \
 ```
 
 **注意**: WebDataset を使う場合は `--max_train_steps` の指定を推奨（データセット長が不定のため）
+
+なおここでリリースしているモデルは以下のスクリプトでトレーニングしました。
+```
+finetuning/tokenizer48k/train_upsampler.sh
+```
 
 ### 学習パラメータ
 
