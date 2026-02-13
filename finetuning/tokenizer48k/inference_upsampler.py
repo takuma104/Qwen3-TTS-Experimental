@@ -42,7 +42,8 @@ from safetensors.torch import load_file
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from qwen_tts import Qwen3TTSTokenizer
-from qwen_tts.core.tokenizer_48k.modeling import UpSamplerBlock
+from qwen_tts.core.tokenizer_48k.configuration import Qwen3TTSTokenizer48kDecoderConfig
+from qwen_tts.core.tokenizer_48k.modeling import Qwen3TTSTokenizer48kDecoder
 
 
 def parse_args():
@@ -179,7 +180,7 @@ class Qwen3TTSTokenizer48kHz:
     def _load_base_with_upsampler(
         self, base_model_path: str, upsampler_checkpoint: str
     ):
-        """Load base model with added upsampler"""
+        """Load base model and replace decoder with Qwen3TTSTokenizer48kDecoder"""
         print(f"Loading base model from {base_model_path}...")
 
         # Load base 24kHz model
@@ -206,38 +207,47 @@ class Qwen3TTSTokenizer48kHz:
 
         print(f"Upsampler config: {upsampler_config}")
 
-        # Create upsampler
-        upsampler = UpSamplerBlock(
-            in_channels=1,
-            hidden_dim=upsampler_config.get("upsampler_hidden_dim", 32),
-            kernel_size=upsampler_config.get("upsampler_kernel_size", 4),
-            upsample_factor=upsampler_config.get("upsampler_factor", 2),
+        # Create a 48k decoder config from the base decoder config + upsampler params
+        base_decoder_config = self.tokenizer.model.decoder.config
+        decoder_48k_config = Qwen3TTSTokenizer48kDecoderConfig(
+            enable_48khz_upsampler=True,
+            upsampler_hidden_dim=upsampler_config.get("upsampler_hidden_dim", 32),
+            upsampler_kernel_size=upsampler_config.get("upsampler_kernel_size", 4),
+            upsampler_factor=upsampler_config.get("upsampler_factor", 2),
+            **{
+                k: v
+                for k, v in base_decoder_config.to_dict().items()
+                if k not in ("model_type", "transformers_version")
+            },
         )
 
-        # Load weights
+        # Create 48k decoder and load base decoder weights into it
+        print("Creating Qwen3TTSTokenizer48kDecoder...")
+        decoder_48k = Qwen3TTSTokenizer48kDecoder(decoder_48k_config)
+        base_state_dict = self.tokenizer.model.decoder.state_dict()
+        decoder_48k.load_state_dict(base_state_dict, strict=False)
+
+        # Load upsampler weights
         print(f"Loading upsampler weights from {weights_path}...")
         upsampler_state_dict = load_file(str(weights_path))
 
-        # Remove "decoder.upsampler." prefix from state_dict keys
+        # Remove prefix from state_dict keys if present
         cleaned_state_dict = {}
         for k, v in upsampler_state_dict.items():
             if k.startswith("upsampler."):
-                new_key = k.replace("upsampler.", "")
+                new_key = k.replace("upsampler.", "", 1)
                 cleaned_state_dict[new_key] = v
             else:
                 cleaned_state_dict[k] = v
 
-        upsampler.load_state_dict(cleaned_state_dict)
-        upsampler = upsampler.to(self.device).to(self.dtype)
-        upsampler.eval()
+        decoder_48k.upsampler.load_state_dict(cleaned_state_dict)
+        decoder_48k = decoder_48k.to(self.device).to(self.dtype)
+        decoder_48k.eval()
 
-        # Add upsampler to decoder
-        decoder = self.tokenizer.model.decoder
-        decoder.upsampler = upsampler
-        decoder.total_upsample *= upsampler_config.get("upsampler_factor", 2)
+        # Replace the decoder
+        self.tokenizer.model.decoder = decoder_48k
 
-        # Update both config and model instance variables
-        # (both needed since model copies from config at __init__)
+        # Update sample rates
         upsampler_factor = upsampler_config.get("upsampler_factor", 2)
         original_rate = self.tokenizer.config.output_sample_rate
         new_output_rate = original_rate * upsampler_factor
@@ -245,17 +255,14 @@ class Qwen3TTSTokenizer48kHz:
             self.tokenizer.config.decode_upsample_rate * upsampler_factor
         )
 
-        # Update config
         self.tokenizer.config.output_sample_rate = new_output_rate
         self.tokenizer.config.decode_upsample_rate = new_decode_upsample_rate
-
-        # Also update model instance variables directly (get_output_sample_rate() references these)
         self.tokenizer.model.output_sample_rate = new_output_rate
         self.tokenizer.model.decode_upsample_rate = new_decode_upsample_rate
 
         self.output_sample_rate = new_output_rate
         print(
-            f"48kHz upsampler attached. Output sample rate: {self.output_sample_rate} Hz"
+            f"48kHz decoder replaced. Output sample rate: {self.output_sample_rate} Hz"
         )
 
     def encode(self, audio_path: str):
