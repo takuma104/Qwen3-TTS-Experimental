@@ -140,6 +140,8 @@ class Qwen3TTSTokenizer48kPreTrainedModel(Qwen3TTSTokenizerV2PreTrainedModel):
 class Qwen3TTSTokenizer48kModel(Qwen3TTSTokenizerV2Model):
     """48kHz tokenizer model extending the base 12Hz tokenizer with upsampling capability."""
 
+    config_class = Qwen3TTSTokenizer48kConfig
+
     def __init__(self, config: Qwen3TTSTokenizer48kConfig):
         super().__init__(config)
         # Replace decoder with 48k version
