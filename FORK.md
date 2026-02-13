@@ -1,4 +1,4 @@
-# Qwen3-TTS 48kHz Upsampler Implementation
+# [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) 48kHz Upsampler Implementation
 
 ## Overview
 
