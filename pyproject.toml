@@ -39,6 +39,7 @@ dependencies = [
   "peft>=0.18.1",
   "datasets>=4.5.0",
   "black>=26.1.0",
+  "matplotlib>=3.10.8",
 ]
 
 [project.urls]
