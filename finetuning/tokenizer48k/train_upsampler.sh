@@ -1,13 +1,14 @@
 #!/bin/sh
 
-RUN_NUMBER=4
+RUN_NUMBER=5
 
 uv run accelerate launch train_upsampler.py \
     --train_shards "/mnt/4tb/takuma/dataset/speech/gg_dataset/webdataset_upsampler/train/*.tar" \
     --val_shards "/mnt/4tb/takuma/dataset/speech/gg_dataset/webdataset_upsampler/val/*.tar" \
     --output_dir output/upsampler_run${RUN_NUMBER} \
-    --batch_size 32 \
+    --batch_size 16 \
     --lr 1e-4 \
+    --upsampler_hidden_dim=64 \
     --max_train_steps 1000000 \
     --max_audio_length 5.0 \
     --l1_weight 0.0 \
@@ -18,5 +19,4 @@ uv run accelerate launch train_upsampler.py \
     --wandb_project qwen3tts_tokenizer48k \
     --wandb_run_name run${RUN_NUMBER}
 
-    # --upsampler_hidden_dim=64 \
 
