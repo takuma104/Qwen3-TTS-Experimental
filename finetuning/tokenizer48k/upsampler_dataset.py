@@ -25,38 +25,29 @@ def collate_fn(batch: List[dict]) -> dict:
     # Get maximum lengths
     max_codes = max(b["audio_codes"].shape[0] for b in batch)
     max_samples_48k = max(b["audio_48k"].shape[0] for b in batch)
-    max_samples_24k = max(b["audio_24k"].shape[0] for b in batch)
 
     batch_size = len(batch)
 
     # Initialize batch tensors
     audio_codes = torch.zeros(batch_size, max_codes, 16, dtype=torch.long)
     audio_48k = torch.zeros(batch_size, max_samples_48k)
-    audio_24k = torch.zeros(batch_size, max_samples_24k)
     code_lengths = torch.zeros(batch_size, dtype=torch.long)
     audio_48k_lengths = torch.zeros(batch_size, dtype=torch.long)
-    audio_24k_lengths = torch.zeros(batch_size, dtype=torch.long)
 
     for i, b in enumerate(batch):
         codes_len = b["audio_codes"].shape[0]
         samples_48k = b["audio_48k"].shape[0]
-        samples_24k = b["audio_24k"].shape[0]
 
         audio_codes[i, :codes_len] = b["audio_codes"]
         audio_48k[i, :samples_48k] = b["audio_48k"]
-        audio_24k[i, :samples_24k] = b["audio_24k"]
-
         code_lengths[i] = codes_len
         audio_48k_lengths[i] = samples_48k
-        audio_24k_lengths[i] = samples_24k
 
     return {
         "audio_codes": audio_codes,  # (batch, max_codes, 16)
         "audio_48k": audio_48k,  # (batch, max_samples_48k)
-        "audio_24k": audio_24k,  # (batch, max_samples_24k)
         "code_lengths": code_lengths,  # (batch,)
         "audio_48k_lengths": audio_48k_lengths,  # (batch,)
-        "audio_24k_lengths": audio_24k_lengths,  # (batch,)
     }
 
 
@@ -144,20 +135,12 @@ def create_webdataset_loader(
         else:
             audio_48k = audio
 
-        # Also resample to 24kHz (for reference)
-        if sr != 24000:
-            audio_24k = librosa.resample(audio, orig_sr=sr, target_sr=24000)
-        else:
-            audio_24k = audio
-
         # Convert to tensor
         audio_48k = torch.from_numpy(audio_48k).float()
-        audio_24k = torch.from_numpy(audio_24k).float()
 
         return {
             "audio_codes": audio_codes,  # (seq_len, 16)
             "audio_48k": audio_48k,  # (samples_48k,)
-            "audio_24k": audio_24k,  # (samples_24k,)
         }
 
     # Build WebDataset
@@ -210,6 +193,5 @@ if __name__ == "__main__":
         print(f"Batch {i}:")
         print(f"  audio_codes: {batch['audio_codes'].shape}")
         print(f"  audio_48k: {batch['audio_48k'].shape}")
-        print(f"  audio_24k: {batch['audio_24k'].shape}")
         if i >= 2:
             break
