@@ -124,7 +124,10 @@ class Qwen3TTSTokenizer48kDecoder(Qwen3TTSTokenizerV2Decoder):
             )
 
     def forward(self, codes):
-        wav = super().forward(codes)
+        # Run frozen base decoder without gradient tracking to save VRAM
+        with torch.no_grad():
+            wav = super().forward(codes)
+        wav = wav.detach()
 
         if self.upsampler is not None:
             wav = self.upsampler(wav)
