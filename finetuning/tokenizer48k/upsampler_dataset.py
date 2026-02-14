@@ -68,6 +68,7 @@ def create_webdataset_loader(
     batch_size: int = 8,
     num_workers: int = 4,
     shuffle_buffer: int = 1000,
+    token_per_second: float = 12.5,
 ):
     """
     Create WebDataset format data loader
@@ -80,7 +81,7 @@ def create_webdataset_loader(
         batch_size: Batch size
         num_workers: Number of workers
         shuffle_buffer: Shuffle buffer size
-
+        token_per_second: Tokens per second for length filtering
     Returns:
         DataLoader
     """
@@ -99,7 +100,7 @@ def create_webdataset_loader(
         num_codes = audio_codes.shape[0]
 
         # Minimum length check
-        min_codes = int(12 * min_audio_length)
+        min_codes = int(token_per_second * min_audio_length)
         if num_codes < min_codes:
             return None
 
@@ -120,7 +121,7 @@ def create_webdataset_loader(
         audio = audio.astype(np.float32)
 
         # Crop to maximum length (if necessary)
-        max_codes = int(12 * max_audio_length)
+        max_codes = int(token_per_second * max_audio_length)
         if num_codes > max_codes:
             # Select random start position
             start_code = torch.randint(0, num_codes - max_codes, (1,)).item()
@@ -130,7 +131,7 @@ def create_webdataset_loader(
             num_codes = max_codes
 
             # Crop audio to corresponding range
-            samples_per_code = sr / 12
+            samples_per_code = sr / token_per_second
             start_sample = int(start_code * samples_per_code)
             end_sample = int(end_code * samples_per_code)
             audio = audio[start_sample:end_sample]
