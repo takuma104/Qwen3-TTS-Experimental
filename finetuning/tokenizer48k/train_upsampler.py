@@ -19,6 +19,7 @@ Usage:
 """
 
 import argparse
+import gc
 import json
 import os
 import sys
@@ -185,12 +186,12 @@ def create_model(args, accelerator):
     """Create model"""
     accelerator.print(f"Loading base decoder from {args.decoder_model_path}...")
 
-    # Load 24kHz decoder
+    # Load 24kHz decoder to CPU only (no need for GPU - just copying weights)
     tokenizer = Qwen3TTSTokenizer.from_pretrained(
         args.decoder_model_path,
-        attn_implementation="flash_attention_2",
+        attn_implementation="eager",
         dtype=torch.bfloat16,
-        device_map="auto" if torch.cuda.is_available() else None,
+        device_map="cpu",
     )
     base_decoder = tokenizer.model.decoder
 
@@ -207,7 +208,8 @@ def create_model(args, accelerator):
     decoder_config = Qwen3TTSTokenizer48kDecoderConfig(
         **config_dict,
     )
-    decoder = Qwen3TTSTokenizer48kDecoder(decoder_config)
+    decoder_config._attn_implementation = "flash_attention_2"
+    decoder = Qwen3TTSTokenizer48kDecoder(decoder_config).to(torch.bfloat16)
 
     # Copy 24kHz part weights
     missing_keys, unexpected_keys = decoder.load_state_dict(
@@ -215,6 +217,10 @@ def create_model(args, accelerator):
     )
     accelerator.print(f"Missing keys (expected for upsampler): {missing_keys}")
     accelerator.print(f"Unexpected keys: {unexpected_keys}")
+
+    # Free original model (encoder + decoder) to avoid GPU memory leak
+    del tokenizer, base_decoder
+    gc.collect()
 
     # Freeze 24kHz part, train only upsampler
     for name, param in decoder.named_parameters():
