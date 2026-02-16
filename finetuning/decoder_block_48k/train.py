@@ -33,7 +33,7 @@ import torch
 import torch.nn as nn
 from accelerate import Accelerator
 from accelerate.utils import set_seed
-from safetensors.torch import save_file
+from safetensors.torch import load_file, save_file
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
@@ -646,8 +646,28 @@ def main():
     start_epoch = 0
     if args.resume_from:
         accelerator.print(f"Resuming from {args.resume_from}...")
+        resume_dir = Path(args.resume_from)
+
+        # Load trainable decoder block weights
+        weights_path = resume_dir / "decoder_block.safetensors"
+        if weights_path.exists():
+            saved_weights = load_file(str(weights_path))
+            unwrapped_model = accelerator.unwrap_model(model)
+            missing, unexpected = unwrapped_model.decoder.load_state_dict(
+                saved_weights, strict=False
+            )
+            accelerator.print(
+                f"Resumed model weights: {len(saved_weights)} tensors loaded, "
+                f"{len(missing)} missing, {len(unexpected)} unexpected"
+            )
+        else:
+            accelerator.print(
+                f"WARNING: {weights_path} not found, model weights not restored!"
+            )
+
+        # Load optimizer/scheduler/step/epoch
         training_state = torch.load(
-            Path(args.resume_from) / "training_state.pt", map_location="cpu"
+            resume_dir / "training_state.pt", map_location="cpu"
         )
         optimizer.load_state_dict(training_state["optimizer"])
         if training_state["scheduler"] and scheduler:
