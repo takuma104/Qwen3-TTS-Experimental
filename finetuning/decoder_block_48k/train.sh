@@ -13,7 +13,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TRAIN_SHARDS="/mnt/4tb/takuma/dataset/speech/gg_dataset/webdataset_upsampler/train/*.tar"
 VAL_SHARDS="/mnt/4tb/takuma/dataset/speech/gg_dataset/webdataset_upsampler/val/*.tar"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
-RUN_NUMBER=1
+RUN_NUMBER=2
 
 uv run accelerate launch "${SCRIPT_DIR}/train.py" \
     --train_shards "${TRAIN_SHARDS}" \
@@ -25,9 +25,9 @@ uv run accelerate launch "${SCRIPT_DIR}/train.py" \
     --gradient_accumulation_steps 8 \
     --max_audio_length 5.0 \
     --l1_weight 0.0 \
-    --stft_weight 1.0 \
+    --stft_weight 0.0 \
     --mel_weight 1.0 \
-    --rms_weight 1.0 \
+    --rms_weight 0.0 \
     --save_every 5000 \
     --eval_every 1000 \
     --log_every 10 \
