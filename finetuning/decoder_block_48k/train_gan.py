@@ -88,6 +88,12 @@ def parse_args():
         "--extra_upsample_rate", type=int, default=2,
         help="Additional upsample rate to append (default: 2 for 48kHz)",
     )
+    parser.add_argument(
+        "--num_frozen",
+        type=int,
+        default=None,
+        help="Number of decoder modules to freeze (default: base_num_decoder_modules - 2)",
+    )
 
     # Generator checkpoint (warm-start from reconstruction-only training)
     parser.add_argument(
@@ -231,7 +237,14 @@ def create_model(args, accelerator):
     gc.collect()
 
     # Freeze base parameters
-    num_frozen = base_num_decoder_modules - 2
+    if args.num_frozen is not None:
+        num_frozen = args.num_frozen
+        if num_frozen < 0 or num_frozen > len(decoder.decoder):
+            raise ValueError(
+                f"--num_frozen must be in [0, {len(decoder.decoder)}], got {num_frozen}"
+            )
+    else:
+        num_frozen = base_num_decoder_modules - 2
     for param in decoder.parameters():
         param.requires_grad = False
     for i in range(num_frozen, len(decoder.decoder)):
@@ -549,6 +562,21 @@ def main():
         accelerator.print(f"Resuming GAN training from {args.resume_from}...")
         checkpoint_dir = Path(args.resume_from)
 
+        # Load checkpoint config to check num_frozen compatibility
+        prev_num_frozen = None
+        config_path = checkpoint_dir / "config.json"
+        if config_path.exists():
+            with open(config_path) as f:
+                ckpt_config = json.load(f)
+            prev_num_frozen = ckpt_config.get("num_frozen_decoder_modules")
+
+        num_frozen_changed = prev_num_frozen is not None and prev_num_frozen != num_frozen
+        if num_frozen_changed:
+            accelerator.print(
+                f"NOTE: num_frozen changed ({prev_num_frozen} -> {num_frozen}). "
+                f"Generator optimizer/scheduler state will NOT be restored."
+            )
+
         # Load discriminator weights
         disc_state = torch.load(checkpoint_dir / "discriminator.pt", map_location="cpu")
         accelerator.unwrap_model(mpd).load_state_dict(disc_state["mpd"])
@@ -556,14 +584,19 @@ def main():
 
         # Load training state
         training_state = torch.load(checkpoint_dir / "training_state.pt", map_location="cpu")
-        optimizer_g.load_state_dict(training_state["optimizer_g"])
-        optimizer_d.load_state_dict(training_state["optimizer_d"])
-        if training_state["scheduler_g"] and scheduler_g:
-            scheduler_g.load_state_dict(training_state["scheduler_g"])
-        if training_state["scheduler_d"] and scheduler_d:
-            scheduler_d.load_state_dict(training_state["scheduler_d"])
         start_step = training_state["step"]
         start_epoch = training_state["epoch"]
+
+        if not num_frozen_changed:
+            optimizer_g.load_state_dict(training_state["optimizer_g"])
+            if training_state["scheduler_g"] and scheduler_g:
+                scheduler_g.load_state_dict(training_state["scheduler_g"])
+
+        # Discriminator optimizer/scheduler is always restored (unaffected by num_frozen)
+        optimizer_d.load_state_dict(training_state["optimizer_d"])
+        if training_state["scheduler_d"] and scheduler_d:
+            scheduler_d.load_state_dict(training_state["scheduler_d"])
+
         accelerator.print(f"Resumed from step {start_step}, epoch {start_epoch}")
 
     # Training loop
