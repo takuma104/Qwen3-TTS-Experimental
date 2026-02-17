@@ -85,6 +85,12 @@ def parse_args():
         default=2,
         help="Additional upsample rate to append (default: 2 for 48kHz)",
     )
+    parser.add_argument(
+        "--num_frozen",
+        type=int,
+        default=None,
+        help="Number of decoder modules to freeze (default: base_num_decoder_modules - 2)",
+    )
 
     # Training settings
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
@@ -318,7 +324,14 @@ def create_model(args, accelerator):
     # base_num_decoder_modules = len([pre_conv] + base_DecoderBlocks + [SnakeBeta, OutputConv])
     # We freeze decoder[0:base_num_decoder_modules-2] (pre_conv + all base DecoderBlocks)
     # Note: the old SnakeBeta and OutputConv (last 2) are gone; new ones are at different indices
-    num_frozen = base_num_decoder_modules - 2  # freeze pre_conv + base DecoderBlocks
+    if args.num_frozen is not None:
+        num_frozen = args.num_frozen
+        if num_frozen < 0 or num_frozen > len(decoder.decoder):
+            raise ValueError(
+                f"--num_frozen must be in [0, {len(decoder.decoder)}], got {num_frozen}"
+            )
+    else:
+        num_frozen = base_num_decoder_modules - 2  # freeze pre_conv + base DecoderBlocks
 
     for param in decoder.parameters():
         param.requires_grad = False
@@ -648,6 +661,21 @@ def main():
         accelerator.print(f"Resuming from {args.resume_from}...")
         resume_dir = Path(args.resume_from)
 
+        # Load checkpoint config to check num_frozen compatibility
+        prev_num_frozen = None
+        config_path = resume_dir / "config.json"
+        if config_path.exists():
+            with open(config_path) as f:
+                ckpt_config = json.load(f)
+            prev_num_frozen = ckpt_config.get("num_frozen_decoder_modules")
+
+        num_frozen_changed = prev_num_frozen is not None and prev_num_frozen != num_frozen
+        if num_frozen_changed:
+            accelerator.print(
+                f"NOTE: num_frozen changed ({prev_num_frozen} -> {num_frozen}). "
+                f"Optimizer/scheduler state will NOT be restored."
+            )
+
         # Load trainable decoder block weights
         weights_path = resume_dir / "decoder_block.safetensors"
         if weights_path.exists():
@@ -669,11 +697,13 @@ def main():
         training_state = torch.load(
             resume_dir / "training_state.pt", map_location="cpu"
         )
-        optimizer.load_state_dict(training_state["optimizer"])
-        if training_state["scheduler"] and scheduler:
-            scheduler.load_state_dict(training_state["scheduler"])
         start_step = training_state["step"]
         start_epoch = training_state["epoch"]
+
+        if not num_frozen_changed:
+            optimizer.load_state_dict(training_state["optimizer"])
+            if training_state["scheduler"] and scheduler:
+                scheduler.load_state_dict(training_state["scheduler"])
 
     # Training loop
     global_step = start_step
