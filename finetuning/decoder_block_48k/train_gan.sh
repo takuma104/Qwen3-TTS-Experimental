@@ -24,12 +24,12 @@ uv run accelerate launch "${SCRIPT_DIR}/train_gan.py" \
     --train_shards "${TRAIN_SHARDS}" \
     --val_shards "${VAL_SHARDS}" \
     --output_dir "${OUTPUT_DIR}/run_gan${RUN_NUMBER}" \
-    --resume_generator_from "${GENERATOR_CHECKPOINT}" \
-    --batch_size 16 \
+    --num_frozen 0 \
+    --batch_size 6 \
     --lr_g 1e-4 \
     --lr_d 2e-4 \
     --max_train_steps 500000 \
-    --gradient_accumulation_steps 2 \
+    --gradient_accumulation_steps 10 \
     --max_audio_length 5.0 \
     --lambda_adv 1.0 \
     --lambda_fm 2.0 \
