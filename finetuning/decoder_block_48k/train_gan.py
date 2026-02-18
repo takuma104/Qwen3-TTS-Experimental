@@ -659,6 +659,7 @@ def main():
                     args.max_grad_norm,
                 )
                 optimizer_d.step()
+                scheduler_d.step()
 
             # =====================
             # Generator update
@@ -695,9 +696,7 @@ def main():
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 optimizer_g.step()
-
-            scheduler_g.step()
-            scheduler_d.step()
+                scheduler_g.step()
 
             # Logging
             if global_step % args.log_every == 0:
