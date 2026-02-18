@@ -37,6 +37,6 @@ uv run accelerate launch "${SCRIPT_DIR}/train_gan.py" \
     --save_every 5000 \
     --eval_every 1000 \
     --log_every 10 \
-    --wandb_project qwen3-tts-decoder-block-48k \
+    --wandb_project qwen3-tts-decoder-block-48k-gan \
     --wandb_run_name "run_gan${RUN_NUMBER}" \
     --mixed_precision bf16
