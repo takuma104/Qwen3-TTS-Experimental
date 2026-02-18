@@ -128,16 +128,21 @@ def main():
             )
     print(f"Loaded {len(base_state_dict)} keys from base model")
 
-    # Remove old final decoder layers (SnakeBeta + OutputConv)
-    # In base model: decoder.decoder.{num_frozen}.* and decoder.decoder.{num_frozen+1}.*
+    # Remove old base decoder layers that will be replaced by checkpoint weights
+    # (all decoder.decoder.{i} where i >= num_frozen)
     keys_to_remove = []
     for k in base_state_dict:
-        for i in range(num_frozen, num_frozen + 2):
-            if k.startswith(f"decoder.decoder.{i}."):
-                keys_to_remove.append(k)
+        if k.startswith("decoder.decoder."):
+            parts = k.split(".")
+            try:
+                idx = int(parts[2])
+                if idx >= num_frozen:
+                    keys_to_remove.append(k)
+            except (ValueError, IndexError):
+                pass
     for k in keys_to_remove:
         del base_state_dict[k]
-    print(f"Removed {len(keys_to_remove)} old final layer keys")
+    print(f"Removed {len(keys_to_remove)} old base decoder layer keys (decoder.decoder.{num_frozen}+)")
 
     # Load trained decoder block weights
     print("Loading trained decoder block weights...")
