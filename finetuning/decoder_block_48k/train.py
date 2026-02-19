@@ -541,7 +541,7 @@ def main():
         rms_weight=args.rms_weight,
         multi_res_mel_weight=args.multi_res_mel_weight,
         global_rms_weight=args.global_rms_weight,
-    )
+    ).to(accelerator.device)
 
     # Training data
     accelerator.print(f"Loading training data: {args.train_shards}...")
