@@ -130,6 +130,18 @@ def parse_args():
     parser.add_argument(
         "--rms_weight", type=float, default=1.0, help="RMS loss weight"
     )
+    parser.add_argument(
+        "--multi_res_mel_weight",
+        type=float,
+        default=0.0,
+        help="Multi-resolution mel loss weight (inworld-ai style, 7 resolutions)",
+    )
+    parser.add_argument(
+        "--global_rms_weight",
+        type=float,
+        default=0.0,
+        help="Global dB RMS loss weight (inworld-ai style)",
+    )
 
     # Data settings
     parser.add_argument(
@@ -527,6 +539,8 @@ def main():
         stft_weight=args.stft_weight,
         mel_weight=args.mel_weight,
         rms_weight=args.rms_weight,
+        multi_res_mel_weight=args.multi_res_mel_weight,
+        global_rms_weight=args.global_rms_weight,
     )
 
     # Training data
@@ -626,6 +640,8 @@ def main():
             "stft_weight": args.stft_weight,
             "mel_weight": args.mel_weight,
             "rms_weight": args.rms_weight,
+            "multi_res_mel_weight": args.multi_res_mel_weight,
+            "global_rms_weight": args.global_rms_weight,
             "max_audio_length": args.max_audio_length,
             "decoder_model_path": args.decoder_model_path,
         }

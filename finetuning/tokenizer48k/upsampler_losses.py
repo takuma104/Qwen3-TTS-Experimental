@@ -14,6 +14,7 @@ from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchaudio
 
 
 class STFTLoss(nn.Module):
@@ -267,6 +268,100 @@ class MelSpectrogramLoss(nn.Module):
         return F.l1_loss(pred_mel, target_mel)
 
 
+class MultiResolutionMelSpectrogramLoss(nn.Module):
+    """
+    Multi-resolution Mel Spectrogram Loss
+
+    Computes mel spectrogram loss at 7 different resolutions (window sizes)
+    and sums the L1 loss on log10-scaled mel spectrograms.
+    Ported from inworld-ai/tts criterion.py.
+
+    Args:
+        sample_rate: Sample rate of the audio
+        n_mels: Number of mel bins per resolution
+        window_lengths: FFT/window size per resolution
+        clamp_eps: Epsilon for clamping before log
+        pow: Power applied before log (1.0 = amplitude, 2.0 = power)
+    """
+
+    def __init__(
+        self,
+        sample_rate: int = 48000,
+        n_mels: List[int] = None,
+        window_lengths: List[int] = None,
+        clamp_eps: float = 1e-5,
+        pow: float = 1.0,
+    ):
+        super().__init__()
+        if n_mels is None:
+            n_mels = [5, 10, 20, 40, 80, 160, 320]
+        if window_lengths is None:
+            window_lengths = [32, 64, 128, 256, 512, 1024, 2048]
+
+        self.mel_transforms = nn.ModuleList(
+            [
+                torchaudio.transforms.MelSpectrogram(
+                    sample_rate=sample_rate,
+                    n_fft=window_length,
+                    hop_length=window_length // 4,
+                    n_mels=n_mel,
+                    power=1.0,
+                    center=True,
+                    norm="slaney",
+                    mel_scale="slaney",
+                )
+                for n_mel, window_length in zip(n_mels, window_lengths)
+            ]
+        )
+        self.clamp_eps = clamp_eps
+        self.pow = pow
+        self.loss_fn = nn.L1Loss()
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            pred: Predicted waveform (batch, samples)
+            target: Target waveform (batch, samples)
+
+        Returns:
+            loss: Sum of L1 losses on log mel spectrograms across all resolutions
+        """
+        loss = 0.0
+        for mel_transform in self.mel_transforms:
+            pred_mel = mel_transform(pred)
+            target_mel = mel_transform(target)
+            log_pred = pred_mel.clamp(self.clamp_eps).pow(self.pow).log10()
+            log_target = target_mel.clamp(self.clamp_eps).pow(self.pow).log10()
+            loss = loss + self.loss_fn(log_pred, log_target)
+        return loss
+
+
+class GlobalRMSLoss(nn.Module):
+    """
+    Global RMS Energy Loss in dB
+
+    Computes per-track global RMS, converts to dB, and takes MSE of the
+    dB difference between predicted and target. This captures overall loudness
+    matching rather than frame-level energy.
+    Ported from inworld-ai/tts decoder.py (compute_generator_loss).
+    """
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            pred: Predicted waveform (batch, samples)
+            target: Target waveform (batch, samples)
+
+        Returns:
+            loss: MSE of the per-track dB RMS difference
+        """
+        pred_rms = torch.sqrt(torch.mean(pred**2, dim=-1))
+        target_rms = torch.sqrt(torch.mean(target**2, dim=-1))
+        pred_rms_db = 20 * torch.log10(pred_rms + 1e-10)
+        target_rms_db = 20 * torch.log10(target_rms + 1e-10)
+        return torch.mean((pred_rms_db - target_rms_db) ** 2)
+
+
 class RMSLoss(nn.Module):
     """
     RMS (Root Mean Square) Loss
@@ -335,8 +430,10 @@ class UpsamplerLoss(nn.Module):
         sample_rate: Sample rate (default: 48000)
         l1_weight: L1 loss weight
         stft_weight: STFT loss weight
-        mel_weight: Mel spectrogram loss weight
-        rms_weight: RMS loss weight
+        mel_weight: Single-resolution mel spectrogram loss weight
+        rms_weight: Frame-based RMS loss weight
+        multi_res_mel_weight: Multi-resolution mel spectrogram loss weight (inworld-ai style)
+        global_rms_weight: Global dB RMS loss weight (inworld-ai style)
     """
 
     def __init__(
@@ -346,12 +443,16 @@ class UpsamplerLoss(nn.Module):
         stft_weight: float = 1.0,
         mel_weight: float = 1.0,
         rms_weight: float = 1.0,
+        multi_res_mel_weight: float = 0.0,
+        global_rms_weight: float = 0.0,
     ):
         super().__init__()
         self.l1_weight = l1_weight
         self.stft_weight = stft_weight
         self.mel_weight = mel_weight
         self.rms_weight = rms_weight
+        self.multi_res_mel_weight = multi_res_mel_weight
+        self.global_rms_weight = global_rms_weight
 
         # STFT settings for 48kHz
         self.stft_loss = MultiResolutionSTFTLoss(
@@ -360,7 +461,16 @@ class UpsamplerLoss(nn.Module):
             win_sizes=[240, 600, 1200, 2400],
         )
 
-        # RMS loss (multiple resolutions)
+        # Single-resolution mel spectrogram loss (original)
+        self.mel_loss = MelSpectrogramLoss(
+            sample_rate=sample_rate,
+            n_fft=2048,
+            hop_length=480,
+            win_length=2048,
+            n_mels=128,
+        )
+
+        # Frame-based RMS loss (original, multiple resolutions)
         self.rms_losses = nn.ModuleList(
             [
                 RMSLoss(frame_size=512, hop_size=128),
@@ -369,14 +479,13 @@ class UpsamplerLoss(nn.Module):
             ]
         )
 
-        # Mel spectrogram loss
-        self.mel_loss = MelSpectrogramLoss(
-            sample_rate=sample_rate,
-            n_fft=2048,
-            hop_length=480,
-            win_length=2048,
-            n_mels=128,
+        # Multi-resolution mel spectrogram loss (inworld-ai style: 7 resolutions, torchaudio)
+        self.multi_res_mel_loss = MultiResolutionMelSpectrogramLoss(
+            sample_rate=sample_rate
         )
+
+        # Global dB RMS loss (inworld-ai style: per-track MSE in dB)
+        self.global_rms_loss = GlobalRMSLoss()
 
     def forward(
         self,
@@ -432,14 +541,14 @@ class UpsamplerLoss(nn.Module):
             mag_loss = zero
             stft_loss = zero
 
-        # Mel spectrogram loss (compute if weight is non-zero)
+        # Single-resolution mel spectrogram loss (compute if weight is non-zero)
         if self.mel_weight > 0:
             mel_loss = self.mel_loss(pred, target)
             total_loss = total_loss + self.mel_weight * mel_loss
         else:
             mel_loss = zero
 
-        # RMS loss (compute if weight is non-zero)
+        # Frame-based RMS loss (compute if weight is non-zero)
         if self.rms_weight > 0:
             rms_loss = zero.clone()
             for rms_loss_fn in self.rms_losses:
@@ -449,6 +558,20 @@ class UpsamplerLoss(nn.Module):
         else:
             rms_loss = zero
 
+        # Multi-resolution mel spectrogram loss (inworld-ai style)
+        if self.multi_res_mel_weight > 0:
+            multi_res_mel_loss = self.multi_res_mel_loss(pred, target)
+            total_loss = total_loss + self.multi_res_mel_weight * multi_res_mel_loss
+        else:
+            multi_res_mel_loss = zero
+
+        # Global dB RMS loss (inworld-ai style)
+        if self.global_rms_weight > 0:
+            global_rms_loss = self.global_rms_loss(pred, target)
+            total_loss = total_loss + self.global_rms_weight * global_rms_loss
+        else:
+            global_rms_loss = zero
+
         return {
             "total_loss": total_loss,
             "l1_loss": l1_loss,
@@ -457,6 +580,8 @@ class UpsamplerLoss(nn.Module):
             "mag_loss": mag_loss,
             "mel_loss": mel_loss,
             "rms_loss": rms_loss,
+            "multi_res_mel_loss": multi_res_mel_loss,
+            "global_rms_loss": global_rms_loss,
         }
 
 
