@@ -355,10 +355,13 @@ class GlobalRMSLoss(nn.Module):
         Returns:
             loss: MSE of the per-track dB RMS difference
         """
-        pred_rms = torch.sqrt(torch.mean(pred**2, dim=-1))
-        target_rms = torch.sqrt(torch.mean(target**2, dim=-1))
-        pred_rms_db = 20 * torch.log10(pred_rms + 1e-10)
-        target_rms_db = 20 * torch.log10(target_rms + 1e-10)
+        # Add eps before sqrt to avoid NaN gradients when input is exactly zero
+        # (sqrt(0) has inf gradient, leading to 0/0=NaN in backprop).
+        # sqrt(1e-8) = 1e-4 -> 20*log10(1e-4) = -80 dB, consistent with clamp floor.
+        pred_rms = torch.sqrt(torch.mean(pred**2, dim=-1) + 1e-8)
+        target_rms = torch.sqrt(torch.mean(target**2, dim=-1) + 1e-8)
+        pred_rms_db = (20 * torch.log10(pred_rms)).clamp(min=-80.0)
+        target_rms_db = (20 * torch.log10(target_rms)).clamp(min=-80.0)
         return torch.mean((pred_rms_db - target_rms_db) ** 2)
 
 
