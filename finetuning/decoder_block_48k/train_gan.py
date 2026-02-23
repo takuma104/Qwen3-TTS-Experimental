@@ -46,7 +46,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from finetuning.decoder_block_48k.discriminators import (
     MultiPeriodDiscriminator,
-    MultiScaleDiscriminator,
+    SpecDiscriminator,
 )
 from finetuning.decoder_block_48k.gan_losses import (
     discriminator_loss,
@@ -278,14 +278,14 @@ def create_model(args, accelerator):
 
 
 def create_discriminators(accelerator):
-    """Create MPD and MSD discriminators."""
+    """Create MPD and SpecDiscriminator discriminators."""
     mpd = MultiPeriodDiscriminator()
-    msd = MultiScaleDiscriminator()
+    msd = SpecDiscriminator()  # STFT-based, 8-scale, 48kHz optimized
 
     mpd_params = sum(p.numel() for p in mpd.parameters())
     msd_params = sum(p.numel() for p in msd.parameters())
     accelerator.print(
-        f"Discriminator params: MPD={mpd_params:,}, MSD={msd_params:,}, "
+        f"Discriminator params: MPD={mpd_params:,}, SpecDisc={msd_params:,}, "
         f"Total={mpd_params + msd_params:,}"
     )
 

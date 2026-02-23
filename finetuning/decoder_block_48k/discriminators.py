@@ -4,11 +4,15 @@
 """
 Discriminators for GAN-style training of decoder_block_48k.
 
-Implements lightweight Multi-Period Discriminator (MPD) and Multi-Scale Discriminator (MSD)
-following HiFi-GAN, with reduced channel counts to match the small generator (~95K params).
+Implements:
+- Multi-Period Discriminator (MPD): HiFi-GAN style, lightweight channel counts
+- Multi-Scale Discriminator (MSD): HiFi-GAN style, waveform-based 3 scales
+- Spec Discriminator (SpecDiscriminator): STFT-based multi-resolution, ported from
+  inworld-ai/tts (originally from X-Codec-2.0, MIT License). Uses 8 STFT scales
+  optimized for 48kHz audio.
 """
 
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -190,6 +194,220 @@ class MultiScaleDiscriminator(nn.Module):
         return outputs, fmaps
 
 
+# ---------------------------------------------------------------------------
+# STFT-based Spec Discriminator (ported from inworld-ai/tts / X-Codec-2.0)
+# ---------------------------------------------------------------------------
+
+# Default STFT parameters for 48kHz audio (8 scales, geometrically spaced).
+_STFT_PARAMS_48K: Dict = {
+    "fft_sizes":  [78,  126,  206,  334,  542,  876, 1418, 2296],
+    "hop_sizes":  [39,   63,  103,  167,  271,  438,  709, 1148],
+    "win_lengths": [78, 126,  206,  334,  542,  876, 1418, 2296],
+    "window": "hann_window",
+}
+
+
+def _stft_magnitude(
+    x: torch.Tensor,
+    fft_size: int,
+    hop_size: int,
+    win_length: int,
+    window: torch.Tensor,
+) -> torch.Tensor:
+    """Compute STFT magnitude spectrogram.
+
+    Args:
+        x: (B, T) waveform
+        window: pre-built window tensor (must be on the same device as x)
+
+    Returns:
+        (B, T_frames, F) magnitude spectrogram
+    """
+    x_stft = torch.stft(
+        x, fft_size, hop_size, win_length, window.to(x.device), return_complex=True
+    )
+    magnitude = torch.sqrt(
+        torch.clamp(x_stft.real ** 2 + x_stft.imag ** 2, min=1e-7, max=1e3)
+    )
+    return magnitude.transpose(2, 1)  # (B, T_frames, F)
+
+
+class NLayerSpecDiscriminator(nn.Module):
+    """Single-scale STFT spectrogram discriminator using Conv2d layers.
+
+    Operates on a (B, 1, F, T) spectrogram tensor and returns feature maps
+    from each layer, with the final layer being the discriminator output.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        out_channels: int = 1,
+        kernel_sizes: Tuple[int, int] = (5, 3),
+        channels: int = 32,
+        max_downsample_channels: int = 512,
+        downsample_scales: Tuple[int, ...] = (2, 2, 2),
+    ):
+        super().__init__()
+        assert kernel_sizes[0] % 2 == 1
+        assert kernel_sizes[1] % 2 == 1
+
+        layers = nn.ModuleDict()
+
+        layers["layer_0"] = nn.Sequential(
+            nn.Conv2d(
+                in_channels, channels,
+                kernel_size=kernel_sizes[0],
+                stride=2,
+                padding=kernel_sizes[0] // 2,
+            ),
+            nn.LeakyReLU(0.2, True),
+        )
+
+        in_chs = channels
+        for i, scale in enumerate(downsample_scales):
+            out_chs = min(in_chs * scale, max_downsample_channels)
+            layers[f"layer_{i + 1}"] = nn.Sequential(
+                nn.Conv2d(
+                    in_chs, out_chs,
+                    kernel_size=scale * 2 + 1,
+                    stride=scale,
+                    padding=scale,
+                ),
+                nn.LeakyReLU(0.2, True),
+            )
+            in_chs = out_chs
+
+        out_chs = min(in_chs * 2, max_downsample_channels)
+        layers[f"layer_{len(downsample_scales) + 1}"] = nn.Sequential(
+            nn.Conv2d(in_chs, out_chs, kernel_size=kernel_sizes[1], padding=kernel_sizes[1] // 2),
+            nn.LeakyReLU(0.2, True),
+        )
+        layers[f"layer_{len(downsample_scales) + 2}"] = nn.Conv2d(
+            out_chs, out_channels, kernel_size=kernel_sizes[1], padding=kernel_sizes[1] // 2
+        )
+
+        self.layers = layers
+
+    def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
+        """
+        Args:
+            x: (B, 1, F, T) spectrogram
+
+        Returns:
+            List of tensors for each layer (including the final output layer).
+        """
+        results = []
+        for layer in self.layers.values():
+            x = layer(x)
+            results.append(x)
+        return results
+
+
+class SpecDiscriminator(nn.Module):
+    """Multi-resolution STFT spectrogram discriminator.
+
+    Ported from inworld-ai/tts (based on X-Codec-2.0, MIT License).
+    Uses multiple STFT resolutions to capture spectral patterns at different
+    time-frequency scales.  Provides the same (outputs, fmaps) interface as
+    MultiScaleDiscriminator so it can be used as a drop-in replacement.
+
+    Args:
+        stft_params: Dict with keys fft_sizes, hop_sizes, win_lengths, window.
+            Defaults to 8-scale params optimized for 48 kHz.
+        in_channels: Input channels for each sub-discriminator.
+        out_channels: Output channels for each sub-discriminator.
+        kernel_sizes: (first_kernel, later_kernel) for Conv2d layers.
+        channels: Base number of channels.
+        max_downsample_channels: Channel cap for downsample layers.
+        downsample_scales: Stride multipliers for downsampling layers.
+        use_weight_norm: Apply weight norm to all Conv layers.
+    """
+
+    def __init__(
+        self,
+        stft_params: Optional[Dict] = None,
+        in_channels: int = 1,
+        out_channels: int = 1,
+        kernel_sizes: Tuple[int, int] = (7, 3),
+        channels: int = 32,
+        max_downsample_channels: int = 512,
+        downsample_scales: Tuple[int, ...] = (2, 2, 2),
+        use_weight_norm: bool = True,
+    ):
+        super().__init__()
+
+        if stft_params is None:
+            stft_params = _STFT_PARAMS_48K
+
+        self.stft_params = stft_params
+        self.sub_discs = nn.ModuleList(
+            [
+                NLayerSpecDiscriminator(
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    kernel_sizes=kernel_sizes,
+                    channels=channels,
+                    max_downsample_channels=max_downsample_channels,
+                    downsample_scales=downsample_scales,
+                )
+                for _ in range(len(stft_params["fft_sizes"]))
+            ]
+        )
+
+        if use_weight_norm:
+            self._apply_weight_norm()
+        self._reset_parameters()
+
+    # ------------------------------------------------------------------
+    # forward: same (outputs, fmaps) interface as MultiScaleDiscriminator
+    # ------------------------------------------------------------------
+    def forward(self, x: torch.Tensor) -> DiscriminatorOutput:
+        """
+        Args:
+            x: (B, 1, T) waveform
+
+        Returns:
+            outputs: List[Tensor] — one flattened discriminator output per STFT scale
+            fmaps:   List[List[Tensor]] — intermediate feature maps per STFT scale
+        """
+        outputs = []
+        fmaps = []
+
+        x_mono = x.squeeze(1)  # (B, T)
+        params = self.stft_params
+
+        for i, disc in enumerate(self.sub_discs):
+            window = getattr(torch, params["window"])(params["win_lengths"][i])
+            spec = _stft_magnitude(
+                x_mono,
+                fft_size=params["fft_sizes"][i],
+                hop_size=params["hop_sizes"][i],
+                win_length=params["win_lengths"][i],
+                window=window,
+            )  # (B, T_frames, F)
+            spec = spec.transpose(1, 2).unsqueeze(1)  # (B, 1, F, T_frames)
+
+            layer_results = disc(spec)  # List[Tensor]
+            # Intermediate layers → fmap; final Conv2d output → discriminator output
+            fmaps.append(layer_results[:-1])
+            outputs.append(layer_results[-1].flatten(1, -1))
+
+        return outputs, fmaps
+
+    def _apply_weight_norm(self):
+        def _wn(m):
+            if isinstance(m, (nn.Conv1d, nn.ConvTranspose1d, nn.Conv2d, nn.ConvTranspose2d)):
+                torch.nn.utils.weight_norm(m)
+        self.apply(_wn)
+
+    def _reset_parameters(self):
+        def _init(m):
+            if isinstance(m, (nn.Conv1d, nn.ConvTranspose1d, nn.Conv2d, nn.ConvTranspose2d)):
+                m.weight.data.normal_(0.0, 0.02)
+        self.apply(_init)
+
+
 if __name__ == "__main__":
     # Quick test
     print("Testing discriminators...")
@@ -210,6 +428,13 @@ if __name__ == "__main__":
     for i, (out, fmap) in enumerate(zip(msd_outputs, msd_fmaps)):
         print(f"  Scale {i}: output {out.shape}, {len(fmap)} feature maps")
 
-    total_params = mpd_params + msd_params
-    print(f"\nTotal discriminator params: {total_params:,}")
+    spec_disc = SpecDiscriminator()
+    spec_outputs, spec_fmaps = spec_disc(x)
+    spec_params = sum(p.numel() for p in spec_disc.parameters())
+    print(f"SpecDisc: {len(spec_outputs)} outputs, {spec_params:,} params")
+    for i, (out, fmap) in enumerate(zip(spec_outputs, spec_fmaps)):
+        print(f"  STFT scale {i}: output {out.shape}, {len(fmap)} feature maps")
+
+    total_params = mpd_params + spec_params
+    print(f"\nTotal discriminator params (MPD + SpecDisc): {total_params:,}")
     print("All tests passed!")
