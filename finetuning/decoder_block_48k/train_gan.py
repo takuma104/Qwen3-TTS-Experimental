@@ -54,7 +54,11 @@ from finetuning.decoder_block_48k.gan_losses import (
     generator_adversarial_loss,
 )
 from finetuning.tokenizer48k.upsampler_dataset import create_webdataset_loader
-from finetuning.tokenizer48k.upsampler_losses import MelSpectrogramLoss
+from finetuning.tokenizer48k.upsampler_losses import (
+    GlobalRMSLoss,
+    MelSpectrogramLoss,
+    MultiResolutionMelSpectrogramLoss,
+)
 from qwen_tts import Qwen3TTSTokenizer
 from qwen_tts.core.tokenizer_12hz.configuration_qwen3_tts_tokenizer_v2 import (
     Qwen3TTSTokenizerV2DecoderConfig,
@@ -126,6 +130,10 @@ def parse_args():
     parser.add_argument("--lambda_adv", type=float, default=1.0, help="Adversarial loss weight")
     parser.add_argument("--lambda_fm", type=float, default=2.0, help="Feature matching loss weight")
     parser.add_argument("--lambda_mel", type=float, default=45.0, help="Mel reconstruction loss weight")
+    parser.add_argument("--lambda_multi_res_mel", type=float, default=0.0,
+                        help="Multi-resolution mel loss weight (inworld-ai style, 7 scales). 0=disabled")
+    parser.add_argument("--lambda_global_rms", type=float, default=0.0,
+                        help="Global dB RMS loss weight (inworld-ai style). 0=disabled")
 
     # Data settings
     parser.add_argument("--max_audio_length", type=float, default=5.0, help="Maximum audio length (seconds)")
@@ -403,6 +411,8 @@ def save_checkpoint(
         "lambda_adv": args.lambda_adv,
         "lambda_fm": args.lambda_fm,
         "lambda_mel": args.lambda_mel,
+        "lambda_multi_res_mel": args.lambda_multi_res_mel,
+        "lambda_global_rms": args.lambda_global_rms,
     }
     with open(checkpoint_dir / "config.json", "w") as f:
         json.dump(config_dict, f, indent=2)
@@ -434,6 +444,8 @@ def main():
     # Mel loss (reconstruction component)
     target_sample_rate = 24000 * args.extra_upsample_rate
     mel_loss_fn = MelSpectrogramLoss(sample_rate=target_sample_rate)
+    multi_res_mel_loss_fn = MultiResolutionMelSpectrogramLoss(sample_rate=target_sample_rate).to(accelerator.device)
+    global_rms_loss_fn = GlobalRMSLoss()
 
     # Training data
     accelerator.print(f"Loading training data: {args.train_shards}...")
@@ -533,6 +545,8 @@ def main():
             "lambda_adv": args.lambda_adv,
             "lambda_fm": args.lambda_fm,
             "lambda_mel": args.lambda_mel,
+            "lambda_multi_res_mel": args.lambda_multi_res_mel,
+            "lambda_global_rms": args.lambda_global_rms,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
             "extra_upsample_rate": args.extra_upsample_rate,
             "max_audio_length": args.max_audio_length,
@@ -684,11 +698,25 @@ def main():
                 # Mel reconstruction loss
                 loss_mel = mel_loss_fn(pred, target)
 
+                # Multi-resolution mel loss (inworld-ai style, 7 scales)
+                if args.lambda_multi_res_mel > 0:
+                    loss_multi_res_mel = multi_res_mel_loss_fn(pred, target)
+                else:
+                    loss_multi_res_mel = torch.tensor(0.0, device=pred.device)
+
+                # Global dB RMS loss (inworld-ai style)
+                if args.lambda_global_rms > 0:
+                    loss_global_rms = global_rms_loss_fn(pred, target)
+                else:
+                    loss_global_rms = torch.tensor(0.0, device=pred.device)
+
                 # Total generator loss
                 loss_g = (
                     args.lambda_adv * loss_g_adv
                     + args.lambda_fm * loss_fm
                     + args.lambda_mel * loss_mel
+                    + args.lambda_multi_res_mel * loss_multi_res_mel
+                    + args.lambda_global_rms * loss_global_rms
                 )
 
                 optimizer_g.zero_grad()
@@ -708,6 +736,8 @@ def main():
                     "g/loss_adv": loss_g_adv.item(),
                     "g/loss_fm": loss_fm.item(),
                     "g/loss_mel": loss_mel.item(),
+                    "g/loss_multi_res_mel": loss_multi_res_mel.item(),
+                    "g/loss_global_rms": loss_global_rms.item(),
                     "lr/generator": scheduler_g.get_last_lr()[0],
                     "lr/discriminator": scheduler_d.get_last_lr()[0],
                 }
