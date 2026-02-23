@@ -696,7 +696,10 @@ def main():
                 loss_fm = loss_fm_mpd + loss_fm_msd
 
                 # Mel reconstruction loss
-                loss_mel = mel_loss_fn(pred, target)
+                if args.lambda_mel > 0:
+                    loss_mel = mel_loss_fn(pred, target)
+                else:
+                    loss_mel = torch.tensor(0.0, device=pred.device)
 
                 # Multi-resolution mel loss (inworld-ai style, 7 scales)
                 if args.lambda_multi_res_mel > 0:

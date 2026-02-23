@@ -15,7 +15,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TRAIN_SHARDS="/mnt/4tb/takuma/dataset/speech/gg_dataset/webdataset_upsampler/train/*.tar"
 VAL_SHARDS="/mnt/4tb/takuma/dataset/speech/gg_dataset/webdataset_upsampler/val/*.tar"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
-RUN_NUMBER=2
+RUN_NUMBER=3
 
 # Pre-trained generator checkpoint (from reconstruction-only training)
 # GENERATOR_CHECKPOINT="${OUTPUT_DIR}/run2/checkpoint-best"
@@ -24,16 +24,17 @@ uv run accelerate launch "${SCRIPT_DIR}/train_gan.py" \
     --train_shards "${TRAIN_SHARDS}" \
     --val_shards "${VAL_SHARDS}" \
     --output_dir "${OUTPUT_DIR}/run_gan${RUN_NUMBER}" \
-    --num_frozen 0 \
-    --batch_size 4 \
+    --batch_size 8 \
     --lr_g 1e-4 \
-    --lr_d 2e-4 \
+    --lr_d 1e-4 \
     --max_train_steps 500000 \
-    --gradient_accumulation_steps 16 \
+    --gradient_accumulation_steps 8 \
     --max_audio_length 5.0 \
     --lambda_adv 1.0 \
-    --lambda_fm 2.0 \
-    --lambda_mel 45.0 \
+    --lambda_fm 1.0 \
+    --lambda_mel 0.0 \
+    --lambda_multi_res_mel 15.0 \
+    --lambda_global_rms 1.0 \
     --save_every 5000 \
     --eval_every 1000 \
     --log_every 10 \
