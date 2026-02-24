@@ -15,7 +15,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TRAIN_SHARDS="/mnt/4tb/takuma/dataset/speech/gg_dataset/webdataset_upsampler/train/*.tar"
 VAL_SHARDS="/mnt/4tb/takuma/dataset/speech/gg_dataset/webdataset_upsampler/val/*.tar"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
-RUN_NUMBER=3
+RUN_NUMBER=7
 
 # Pre-trained generator checkpoint (from reconstruction-only training)
 # GENERATOR_CHECKPOINT="${OUTPUT_DIR}/run2/checkpoint-best"
@@ -24,11 +24,11 @@ uv run accelerate launch "${SCRIPT_DIR}/train_gan.py" \
     --train_shards "${TRAIN_SHARDS}" \
     --val_shards "${VAL_SHARDS}" \
     --output_dir "${OUTPUT_DIR}/run_gan${RUN_NUMBER}" \
-    --batch_size 8 \
+    --batch_size 4 \
     --lr_g 1e-4 \
     --lr_d 1e-4 \
     --max_train_steps 500000 \
-    --gradient_accumulation_steps 8 \
+    --gradient_accumulation_steps 16 \
     --max_audio_length 5.0 \
     --lambda_adv 1.0 \
     --lambda_fm 1.0 \
@@ -40,4 +40,4 @@ uv run accelerate launch "${SCRIPT_DIR}/train_gan.py" \
     --log_every 10 \
     --wandb_project qwen3-tts-decoder-block-48k-gan \
     --wandb_run_name "run_gan${RUN_NUMBER}" \
-    --mixed_precision bf16
+    --mixed_precision no
