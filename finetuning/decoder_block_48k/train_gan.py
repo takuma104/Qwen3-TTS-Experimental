@@ -653,6 +653,8 @@ def main():
             # =====================
             # Discriminator update
             # =====================
+            mpd_grad_norm = 0.0
+            msd_grad_norm = 0.0
             with accelerator.accumulate(mpd, msd):
                 # MPD
                 mpd_real_out, _ = mpd(target_wav)
@@ -668,6 +670,18 @@ def main():
 
                 optimizer_d.zero_grad()
                 accelerator.backward(loss_d)
+                # Capture per-model gradient norms (pre-clip, sync steps only)
+                if accelerator.sync_gradients:
+                    mpd_grad_norm = sum(
+                        p.grad.norm().item() ** 2
+                        for p in mpd.parameters()
+                        if p.grad is not None
+                    ) ** 0.5
+                    msd_grad_norm = sum(
+                        p.grad.norm().item() ** 2
+                        for p in msd.parameters()
+                        if p.grad is not None
+                    ) ** 0.5
                 accelerator.clip_grad_norm_(
                     list(mpd.parameters()) + list(msd.parameters()),
                     args.max_grad_norm,
@@ -743,6 +757,8 @@ def main():
                     "d/dg_mpd": dg_mpd.item(),
                     "d/dr_msd": dr_msd.item(),
                     "d/dg_msd": dg_msd.item(),
+                    "d/grad_norm_mpd": mpd_grad_norm,
+                    "d/grad_norm_msd": msd_grad_norm,
                     "g/loss_total": loss_g.item(),
                     "g/loss_adv": loss_g_adv.item(),
                     "g/loss_fm": loss_fm.item(),
