@@ -621,6 +621,11 @@ def main():
     mpd.train()
     msd.train()
 
+    # Persistent across steps so the last sync-step value is logged correctly
+    # (sync steps and log steps don't always align due to gradient accumulation)
+    mpd_grad_norm = 0.0
+    msd_grad_norm = 0.0
+
     for epoch in range(start_epoch, args.num_epochs):
         accelerator.print(f"\n{'=' * 50}")
         accelerator.print(f"Epoch {epoch + 1}/{args.num_epochs}")
@@ -653,8 +658,6 @@ def main():
             # =====================
             # Discriminator update
             # =====================
-            mpd_grad_norm = 0.0
-            msd_grad_norm = 0.0
             with accelerator.accumulate(mpd, msd):
                 # MPD
                 mpd_real_out, _ = mpd(target_wav)
