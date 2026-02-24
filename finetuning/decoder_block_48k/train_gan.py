@@ -655,6 +655,12 @@ def main():
             pred_wav = pred.unsqueeze(1)
             target_wav = target.unsqueeze(1)
 
+            # Align dtype with discriminator params (handles generator checkpoint
+            # loaded in bf16 when mixed_precision=no)
+            _disc_dtype = next(mpd.parameters()).dtype
+            pred_wav = pred_wav.to(dtype=_disc_dtype)
+            target_wav = target_wav.to(dtype=_disc_dtype)
+
             # =====================
             # Discriminator update
             # =====================
