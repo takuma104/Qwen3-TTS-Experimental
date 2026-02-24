@@ -657,12 +657,12 @@ def main():
                 # MPD
                 mpd_real_out, _ = mpd(target_wav)
                 mpd_fake_out, _ = mpd(pred_wav.detach())
-                loss_d_mpd = discriminator_loss(mpd_real_out, mpd_fake_out)
+                loss_d_mpd, loss_d_mpd_r, loss_d_mpd_g, dr_mpd, dg_mpd = discriminator_loss(mpd_real_out, mpd_fake_out)
 
                 # MSD
                 msd_real_out, _ = msd(target_wav)
                 msd_fake_out, _ = msd(pred_wav.detach())
-                loss_d_msd = discriminator_loss(msd_real_out, msd_fake_out)
+                loss_d_msd, loss_d_msd_r, loss_d_msd_g, dr_msd, dg_msd = discriminator_loss(msd_real_out, msd_fake_out)
 
                 loss_d = loss_d_mpd + loss_d_msd
 
@@ -735,6 +735,14 @@ def main():
                     "d/loss_total": loss_d.item(),
                     "d/loss_mpd": loss_d_mpd.item(),
                     "d/loss_msd": loss_d_msd.item(),
+                    "d/r_loss_mpd": loss_d_mpd_r.item(),
+                    "d/g_loss_mpd": loss_d_mpd_g.item(),
+                    "d/r_loss_msd": loss_d_msd_r.item(),
+                    "d/g_loss_msd": loss_d_msd_g.item(),
+                    "d/dr_mpd": dr_mpd.item(),
+                    "d/dg_mpd": dg_mpd.item(),
+                    "d/dr_msd": dr_msd.item(),
+                    "d/dg_msd": dg_msd.item(),
                     "g/loss_total": loss_g.item(),
                     "g/loss_adv": loss_g_adv.item(),
                     "g/loss_fm": loss_fm.item(),

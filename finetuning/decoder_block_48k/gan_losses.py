@@ -8,7 +8,7 @@ GAN Loss Functions for decoder_block_48k training.
 - Feature matching loss
 """
 
-from typing import List
+from typing import List, Tuple
 
 import torch
 
@@ -31,7 +31,7 @@ def generator_adversarial_loss(disc_outputs: List[torch.Tensor]) -> torch.Tensor
 def discriminator_loss(
     disc_real_outputs: List[torch.Tensor],
     disc_fake_outputs: List[torch.Tensor],
-) -> torch.Tensor:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """LSGAN discriminator loss.
 
     Args:
@@ -39,14 +39,29 @@ def discriminator_loss(
         disc_fake_outputs: List of discriminator outputs for fake samples.
 
     Returns:
-        Discriminator loss.
+        (total_loss, r_loss_mean, g_loss_mean, dr_mean, dg_mean)
+        - total_loss:   sum of r_loss + g_loss across all sub-discriminators
+        - r_loss_mean:  mean r_loss per sub-discriminator (for logging)
+        - g_loss_mean:  mean g_loss per sub-discriminator (for logging)
+        - dr_mean:      mean discriminator output for real samples (for logging)
+        - dg_mean:      mean discriminator output for fake samples (for logging)
     """
-    loss = torch.tensor(0.0, device=disc_real_outputs[0].device)
+    device = disc_real_outputs[0].device
+    loss = torch.tensor(0.0, device=device)
+    r_loss_total = torch.tensor(0.0, device=device)
+    g_loss_total = torch.tensor(0.0, device=device)
+    dr_total = torch.tensor(0.0, device=device)
+    dg_total = torch.tensor(0.0, device=device)
+    n = len(disc_real_outputs)
     for dr, dg in zip(disc_real_outputs, disc_fake_outputs):
         r_loss = torch.mean((1 - dr) ** 2)
         g_loss = torch.mean(dg ** 2)
         loss = loss + r_loss + g_loss
-    return loss
+        r_loss_total = r_loss_total + r_loss
+        g_loss_total = g_loss_total + g_loss
+        dr_total = dr_total + torch.mean(dr.float())
+        dg_total = dg_total + torch.mean(dg.float())
+    return loss, r_loss_total / n, g_loss_total / n, dr_total / n, dg_total / n
 
 
 def feature_matching_loss(
