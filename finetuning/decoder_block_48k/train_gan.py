@@ -621,8 +621,7 @@ def main():
     mpd.train()
     msd.train()
 
-    # Persistent across steps so the last sync-step value is logged correctly
-    # (sync steps and log steps don't always align due to gradient accumulation)
+    # Persistent across optimizer-step logs.
     mpd_grad_norm = 0.0
     msd_grad_norm = 0.0
 
@@ -661,10 +660,12 @@ def main():
             pred_wav = pred_wav.to(dtype=_disc_dtype)
             target_wav = target_wav.to(dtype=_disc_dtype)
 
-            # =====================
-            # Discriminator update
-            # =====================
-            with accelerator.accumulate(mpd, msd):
+            # Update D and G under a single accumulation context so
+            # `accelerator.sync_gradients` is aligned for both.
+            with accelerator.accumulate(model, mpd, msd):
+                # =====================
+                # Discriminator update
+                # =====================
                 # MPD
                 mpd_real_out, _ = mpd(target_wav)
                 mpd_fake_out, _ = mpd(pred_wav.detach())
@@ -679,7 +680,7 @@ def main():
 
                 optimizer_d.zero_grad()
                 accelerator.backward(loss_d)
-                # Capture per-model gradient norms (pre-clip, sync steps only)
+                # Capture per-model gradient norms immediately before D step.
                 if accelerator.sync_gradients:
                     mpd_grad_norm = sum(
                         p.grad.norm().item() ** 2
@@ -698,10 +699,9 @@ def main():
                 optimizer_d.step()
                 scheduler_d.step()
 
-            # =====================
-            # Generator update
-            # =====================
-            with accelerator.accumulate(model):
+                # =====================
+                # Generator update
+                # =====================
                 # MPD (with gradients through generator)
                 mpd_fake_out_g, mpd_fake_fmap = mpd(pred_wav)
                 mpd_real_out_g, mpd_real_fmap = mpd(target_wav)
@@ -752,73 +752,75 @@ def main():
                 optimizer_g.step()
                 scheduler_g.step()
 
-            # Logging
-            if global_step % args.log_every == 0:
-                log_dict = {
-                    "d/loss_total": loss_d.item(),
-                    "d/loss_mpd": loss_d_mpd.item(),
-                    "d/loss_msd": loss_d_msd.item(),
-                    "d/r_loss_mpd": loss_d_mpd_r.item(),
-                    "d/g_loss_mpd": loss_d_mpd_g.item(),
-                    "d/r_loss_msd": loss_d_msd_r.item(),
-                    "d/g_loss_msd": loss_d_msd_g.item(),
-                    "d/dr_mpd": dr_mpd.item(),
-                    "d/dg_mpd": dg_mpd.item(),
-                    "d/dr_msd": dr_msd.item(),
-                    "d/dg_msd": dg_msd.item(),
-                    "d/grad_norm_mpd": mpd_grad_norm,
-                    "d/grad_norm_msd": msd_grad_norm,
-                    "g/loss_total": loss_g.item(),
-                    "g/loss_adv": loss_g_adv.item(),
-                    "g/loss_fm": loss_fm.item(),
-                    "g/loss_mel": loss_mel.item(),
-                    "g/loss_multi_res_mel": loss_multi_res_mel.item(),
-                    "g/loss_global_rms": loss_global_rms.item(),
-                    "lr/generator": scheduler_g.get_last_lr()[0],
-                    "lr/discriminator": scheduler_d.get_last_lr()[0],
-                }
-                accelerator.log(log_dict, step=global_step)
+            # Count/log/eval/save only on real optimizer sync steps.
+            if accelerator.sync_gradients:
+                global_step += 1
 
-                progress_bar.set_postfix(
-                    d=loss_d.item(),
-                    g=loss_g.item(),
-                    adv=loss_g_adv.item(),
-                    mel=loss_mel.item(),
-                )
+                # Logging
+                if global_step % args.log_every == 0:
+                    log_dict = {
+                        "d/loss_total": loss_d.item(),
+                        "d/loss_mpd": loss_d_mpd.item(),
+                        "d/loss_msd": loss_d_msd.item(),
+                        "d/r_loss_mpd": loss_d_mpd_r.item(),
+                        "d/g_loss_mpd": loss_d_mpd_g.item(),
+                        "d/r_loss_msd": loss_d_msd_r.item(),
+                        "d/g_loss_msd": loss_d_msd_g.item(),
+                        "d/dr_mpd": dr_mpd.item(),
+                        "d/dg_mpd": dg_mpd.item(),
+                        "d/dr_msd": dr_msd.item(),
+                        "d/dg_msd": dg_msd.item(),
+                        "d/grad_norm_mpd": mpd_grad_norm,
+                        "d/grad_norm_msd": msd_grad_norm,
+                        "g/loss_total": loss_g.item(),
+                        "g/loss_adv": loss_g_adv.item(),
+                        "g/loss_fm": loss_fm.item(),
+                        "g/loss_mel": loss_mel.item(),
+                        "g/loss_multi_res_mel": loss_multi_res_mel.item(),
+                        "g/loss_global_rms": loss_global_rms.item(),
+                        "lr/generator": scheduler_g.get_last_lr()[0],
+                        "lr/discriminator": scheduler_d.get_last_lr()[0],
+                    }
+                    accelerator.log(log_dict, step=global_step)
 
-            # Evaluation
-            if (
-                val_dataloader
-                and global_step % args.eval_every == 0
-                and global_step > 0
-            ):
-                val_losses = eval_step(model, mel_loss_fn, val_dataloader, accelerator)
-                accelerator.print(f"\nStep {global_step} - Validation: {val_losses}")
-                accelerator.log(val_losses, step=global_step)
+                    progress_bar.set_postfix(
+                        d=loss_d.item(),
+                        g=loss_g.item(),
+                        adv=loss_g_adv.item(),
+                        mel=loss_mel.item(),
+                    )
 
-                if val_losses["val_mel_loss"] < best_val_loss:
-                    best_val_loss = val_losses["val_mel_loss"]
+                # Evaluation
+                if (
+                    val_dataloader
+                    and global_step % args.eval_every == 0
+                    and global_step > 0
+                ):
+                    val_losses = eval_step(model, mel_loss_fn, val_dataloader, accelerator)
+                    accelerator.print(f"\nStep {global_step} - Validation: {val_losses}")
+                    accelerator.log(val_losses, step=global_step)
+
+                    if val_losses["val_mel_loss"] < best_val_loss:
+                        best_val_loss = val_losses["val_mel_loss"]
+                        save_checkpoint(
+                            model, mpd, msd, optimizer_g, optimizer_d,
+                            scheduler_g, scheduler_d, global_step, epoch,
+                            args, accelerator, num_frozen,
+                            base_upsample_rates, new_upsample_rates,
+                            is_best=True,
+                        )
+
+                # Save checkpoint
+                if global_step % args.save_every == 0 and global_step > 0:
                     save_checkpoint(
                         model, mpd, msd, optimizer_g, optimizer_d,
                         scheduler_g, scheduler_d, global_step, epoch,
                         args, accelerator, num_frozen,
                         base_upsample_rates, new_upsample_rates,
-                        is_best=True,
                     )
 
-            # Save checkpoint
-            if global_step % args.save_every == 0 and global_step > 0:
-                save_checkpoint(
-                    model, mpd, msd, optimizer_g, optimizer_d,
-                    scheduler_g, scheduler_d, global_step, epoch,
-                    args, accelerator, num_frozen,
-                    base_upsample_rates, new_upsample_rates,
-                )
-
-            global_step += 1
-
-            if args.max_train_steps and global_step >= args.max_train_steps:
-                break
+                if args.max_train_steps and global_step >= args.max_train_steps:
+                    break
 
         # Save at end of epoch
         save_checkpoint(
