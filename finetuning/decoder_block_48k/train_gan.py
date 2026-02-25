@@ -619,6 +619,7 @@ def main():
     # Persistent across optimizer-step logs.
     mpd_grad_norm = 0.0
     msd_grad_norm = 0.0
+    total_seq_len_accumulated = 0
 
     for epoch in range(start_epoch, args.num_epochs):
         accelerator.print(f"\n{'=' * 50}")
@@ -743,6 +744,7 @@ def main():
             # Count/log/eval/save only on real optimizer sync steps.
             if accelerator.sync_gradients:
                 global_step += 1
+                total_seq_len_accumulated += pred.shape[0] * min_len
 
                 # Logging
                 if global_step % args.log_every == 0:
@@ -767,6 +769,8 @@ def main():
                         "g/loss_global_rms": loss_global_rms.item(),
                         "lr/generator": scheduler_g.get_last_lr()[0],
                         "lr/discriminator": scheduler_d.get_last_lr()[0],
+                        "seq_len": pred.shape[0] * min_len,
+                        "total_seq_len_accumulated": total_seq_len_accumulated,
                     }
                     accelerator.log(log_dict, step=global_step)
 
