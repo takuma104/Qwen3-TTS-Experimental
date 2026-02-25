@@ -56,7 +56,6 @@ from finetuning.decoder_block_48k.gan_losses import (
 from finetuning.tokenizer48k.upsampler_dataset import create_webdataset_loader
 from finetuning.tokenizer48k.upsampler_losses import (
     GlobalRMSLoss,
-    MelSpectrogramLoss,
     MultiResolutionMelSpectrogramLoss,
 )
 from qwen_tts import Qwen3TTSTokenizer
@@ -128,11 +127,10 @@ def parse_args():
 
     # GAN loss weights
     parser.add_argument("--lambda_adv", type=float, default=1.0, help="Adversarial loss weight")
-    parser.add_argument("--lambda_fm", type=float, default=2.0, help="Feature matching loss weight")
-    parser.add_argument("--lambda_mel", type=float, default=45.0, help="Mel reconstruction loss weight")
-    parser.add_argument("--lambda_multi_res_mel", type=float, default=0.0,
+    parser.add_argument("--lambda_fm", type=float, default=1.0, help="Feature matching loss weight")
+    parser.add_argument("--lambda_multi_res_mel", type=float, default=15.0,
                         help="Multi-resolution mel loss weight (inworld-ai style, 7 scales). 0=disabled")
-    parser.add_argument("--lambda_global_rms", type=float, default=0.0,
+    parser.add_argument("--lambda_global_rms", type=float, default=1.0,
                         help="Global dB RMS loss weight (inworld-ai style). 0=disabled")
 
     # Data settings
@@ -303,7 +301,7 @@ def create_discriminators(accelerator):
 @torch.no_grad()
 def eval_step(
     model: nn.Module,
-    mel_loss_fn: MelSpectrogramLoss,
+    mel_loss_fn: MultiResolutionMelSpectrogramLoss,
     dataloader: DataLoader,
     accelerator: Accelerator,
     max_batches: int = 50,
@@ -410,7 +408,6 @@ def save_checkpoint(
         "training_type": "gan",
         "lambda_adv": args.lambda_adv,
         "lambda_fm": args.lambda_fm,
-        "lambda_mel": args.lambda_mel,
         "lambda_multi_res_mel": args.lambda_multi_res_mel,
         "lambda_global_rms": args.lambda_global_rms,
     }
@@ -443,7 +440,6 @@ def main():
 
     # Mel loss (reconstruction component)
     target_sample_rate = 24000 * args.extra_upsample_rate
-    mel_loss_fn = MelSpectrogramLoss(sample_rate=target_sample_rate)
     multi_res_mel_loss_fn = MultiResolutionMelSpectrogramLoss(sample_rate=target_sample_rate).to(accelerator.device)
     global_rms_loss_fn = GlobalRMSLoss()
 
@@ -544,7 +540,6 @@ def main():
             "lr_d": args.lr_d,
             "lambda_adv": args.lambda_adv,
             "lambda_fm": args.lambda_fm,
-            "lambda_mel": args.lambda_mel,
             "lambda_multi_res_mel": args.lambda_multi_res_mel,
             "lambda_global_rms": args.lambda_global_rms,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
@@ -718,12 +713,6 @@ def main():
                 loss_g_adv = loss_g_adv_mpd + loss_g_adv_msd
                 loss_fm = loss_fm_mpd + loss_fm_msd
 
-                # Mel reconstruction loss
-                if args.lambda_mel > 0:
-                    loss_mel = mel_loss_fn(pred, target)
-                else:
-                    loss_mel = torch.tensor(0.0, device=pred.device)
-
                 # Multi-resolution mel loss (inworld-ai style, 7 scales)
                 if args.lambda_multi_res_mel > 0:
                     loss_multi_res_mel = multi_res_mel_loss_fn(pred, target)
@@ -740,7 +729,6 @@ def main():
                 loss_g = (
                     args.lambda_adv * loss_g_adv
                     + args.lambda_fm * loss_fm
-                    + args.lambda_mel * loss_mel
                     + args.lambda_multi_res_mel * loss_multi_res_mel
                     + args.lambda_global_rms * loss_global_rms
                 )
@@ -775,7 +763,6 @@ def main():
                         "g/loss_total": loss_g.item(),
                         "g/loss_adv": loss_g_adv.item(),
                         "g/loss_fm": loss_fm.item(),
-                        "g/loss_mel": loss_mel.item(),
                         "g/loss_multi_res_mel": loss_multi_res_mel.item(),
                         "g/loss_global_rms": loss_global_rms.item(),
                         "lr/generator": scheduler_g.get_last_lr()[0],
@@ -787,7 +774,7 @@ def main():
                         d=loss_d.item(),
                         g=loss_g.item(),
                         adv=loss_g_adv.item(),
-                        mel=loss_mel.item(),
+                        mel=loss_multi_res_mel.item(),
                     )
 
                 # Evaluation
@@ -796,7 +783,7 @@ def main():
                     and global_step % args.eval_every == 0
                     and global_step > 0
                 ):
-                    val_losses = eval_step(model, mel_loss_fn, val_dataloader, accelerator)
+                    val_losses = eval_step(model, multi_res_mel_loss_fn, val_dataloader, accelerator)
                     accelerator.print(f"\nStep {global_step} - Validation: {val_losses}")
                     accelerator.log(val_losses, step=global_step)
 

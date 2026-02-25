@@ -32,7 +32,6 @@ uv run accelerate launch "${SCRIPT_DIR}/train_gan.py" \
     --max_audio_length 5.0 \
     --lambda_adv 1.0 \
     --lambda_fm 1.0 \
-    --lambda_mel 0.0 \
     --lambda_multi_res_mel 15.0 \
     --lambda_global_rms 1.0 \
     --save_every 625 \
