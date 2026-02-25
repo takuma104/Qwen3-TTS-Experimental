@@ -128,6 +128,8 @@ def parse_args():
     # GAN loss weights
     parser.add_argument("--lambda_adv", type=float, default=1.0, help="Adversarial loss weight")
     parser.add_argument("--lambda_fm", type=float, default=1.0, help="Feature matching loss weight")
+    parser.add_argument("--lambda_d_mpd", type=float, default=1.0, help="MPD discriminator loss weight")
+    parser.add_argument("--lambda_d_msd", type=float, default=1.0, help="MSD discriminator loss weight")
     parser.add_argument("--lambda_multi_res_mel", type=float, default=15.0,
                         help="Multi-resolution mel loss weight (inworld-ai style, 7 scales). 0=disabled")
     parser.add_argument("--lambda_global_rms", type=float, default=1.0,
@@ -408,6 +410,8 @@ def save_checkpoint(
         "training_type": "gan",
         "lambda_adv": args.lambda_adv,
         "lambda_fm": args.lambda_fm,
+        "lambda_d_mpd": args.lambda_d_mpd,
+        "lambda_d_msd": args.lambda_d_msd,
         "lambda_multi_res_mel": args.lambda_multi_res_mel,
         "lambda_global_rms": args.lambda_global_rms,
     }
@@ -540,6 +544,8 @@ def main():
             "lr_d": args.lr_d,
             "lambda_adv": args.lambda_adv,
             "lambda_fm": args.lambda_fm,
+            "lambda_d_mpd": args.lambda_d_mpd,
+            "lambda_d_msd": args.lambda_d_msd,
             "lambda_multi_res_mel": args.lambda_multi_res_mel,
             "lambda_global_rms": args.lambda_global_rms,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
@@ -672,7 +678,7 @@ def main():
                 msd_fake_out, _ = msd(pred_wav.detach())
                 loss_d_msd, loss_d_msd_r, loss_d_msd_g, dr_msd, dg_msd = discriminator_loss(msd_real_out, msd_fake_out)
 
-                loss_d = loss_d_mpd + loss_d_msd
+                loss_d = args.lambda_d_mpd * loss_d_mpd + args.lambda_d_msd * loss_d_msd
 
                 optimizer_d.zero_grad()
                 accelerator.backward(loss_d)
