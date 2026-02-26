@@ -320,6 +320,7 @@ def eval_step(
 
         audio_codes = batch["audio_codes"].to(accelerator.device).transpose(1, 2)
         target_48k = batch["audio_48k"].to(accelerator.device)
+        lengths_48k = batch["audio_48k_lengths"].to(accelerator.device)
 
         pred_48k = model(audio_codes)
 
@@ -329,6 +330,11 @@ def eval_step(
         min_len = min(pred.shape[-1], target.shape[-1])
         pred = pred[..., :min_len]
         target = target[..., :min_len]
+
+        # Mask padding region
+        mask = torch.arange(min_len, device=pred.device)[None, :] < lengths_48k[:, None]
+        pred = pred * mask
+        target = target * mask
 
         mel_loss = mel_loss_fn(pred, target)
         total_mel_loss += mel_loss.item()
@@ -641,6 +647,7 @@ def main():
         for step, batch in enumerate(progress_bar):
             audio_codes = batch["audio_codes"].to(accelerator.device).transpose(1, 2)
             target_48k = batch["audio_48k"].to(accelerator.device)
+            lengths_48k = batch["audio_48k_lengths"].to(accelerator.device)
 
             # Generator forward
             pred_48k = model(audio_codes)
@@ -651,6 +658,11 @@ def main():
             min_len = min(pred.shape[-1], target.shape[-1])
             pred = pred[..., :min_len]
             target = target[..., :min_len]
+
+            # Mask padding region
+            mask = torch.arange(min_len, device=pred.device)[None, :] < lengths_48k[:, None]
+            pred = pred * mask
+            target = target * mask
 
             # Reshape to (B, 1, T) for discriminators
             pred_wav = pred.unsqueeze(1)
@@ -750,7 +762,10 @@ def main():
             # Count/log/eval/save only on real optimizer sync steps.
             if accelerator.sync_gradients:
                 global_step += 1
-                total_seq_len_accumulated += pred.shape[0] * min_len
+                total_sec = lengths_48k.sum().item() / target_sample_rate
+                token_per_sec = 12.5
+                total_seq_len = int(total_sec * token_per_sec)
+                total_seq_len_accumulated += total_seq_len
 
                 # Logging
                 if global_step % args.log_every == 0:
@@ -775,7 +790,7 @@ def main():
                         "g/loss_global_rms": loss_global_rms.item(),
                         "lr/generator": scheduler_g.get_last_lr()[0],
                         "lr/discriminator": scheduler_d.get_last_lr()[0],
-                        "seq_len": pred.shape[0] * min_len,
+                        "seq_len": total_seq_len,
                         "total_seq_len_accumulated": total_seq_len_accumulated,
                     }
                     accelerator.log(log_dict, step=global_step)
