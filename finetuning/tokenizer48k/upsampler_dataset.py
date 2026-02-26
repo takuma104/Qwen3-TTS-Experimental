@@ -138,6 +138,12 @@ def create_webdataset_loader(
         # Convert to tensor
         audio_48k = torch.from_numpy(audio_48k).float()
 
+        # Skip very quiet audio
+        rms = torch.sqrt(torch.mean(audio_48k**2, dim=-1) + 1e-8)
+        rms_db = (20 * torch.log10(rms)).item()
+        if rms_db < -40.0: 
+            return None
+
         return {
             "audio_codes": audio_codes,  # (seq_len, 16)
             "audio_48k": audio_48k,  # (samples_48k,)
