@@ -5,7 +5,8 @@
 Discriminators for GAN-style training of decoder_block_48k.
 
 Implements:
-- Multi-Period Discriminator (MPD): HiFi-GAN style, lightweight channel counts
+- Multi-Period Discriminator (MPD): ported from inworld-ai/tts (X-Codec-2.0, MIT),
+  exponentially growing channels (16→64→256→512), 5-layer with stride-1 final layer
 - Multi-Scale Discriminator (MSD): HiFi-GAN style, waveform-based 3 scales
 - Spec Discriminator (SpecDiscriminator): STFT-based multi-resolution, ported from
   inworld-ai/tts (originally from X-Codec-2.0, MIT License). Uses 8 STFT scales
@@ -24,32 +25,62 @@ from torch.nn.utils import spectral_norm, weight_norm
 DiscriminatorOutput = Tuple[List[torch.Tensor], List[List[torch.Tensor]]]
 
 
-class PeriodSubDiscriminator(nn.Module):
-    """Sub-discriminator for a single period in MPD.
+class HiFiGANPeriodDiscriminator(nn.Module):
+    """Period sub-discriminator ported from inworld-ai/tts (X-Codec-2.0, MIT).
 
-    Reshapes 1D waveform to 2D (T//p, p) and applies 2D convolutions.
+    Channels grow exponentially via channel_increasing_factor and are capped at
+    max_downsample_channels.  The final stride-1 layer in the default
+    downsample_scales=[3,3,3,3,1] broadens the receptive field without further
+    temporal downsampling.
+
+    Returns (output_flat, fmap) to match the DiscriminatorOutput interface.
     """
 
-    def __init__(self, period: int, channels: List[int] = [16, 32, 64, 128]):
+    def __init__(
+        self,
+        period: int,
+        kernel_sizes: List[int] = [5, 3],
+        channels: int = 16,
+        downsample_scales: List[int] = [3, 3, 3, 3, 1],
+        channel_increasing_factor: int = 4,
+        max_downsample_channels: int = 512,
+        negative_slope: float = 0.1,
+        use_weight_norm: bool = True,
+    ):
         super().__init__()
-        self.period = period
+        assert len(kernel_sizes) == 2
+        assert kernel_sizes[0] % 2 == 1, "kernel_sizes[0] must be odd"
+        assert kernel_sizes[1] % 2 == 1, "kernel_sizes[1] must be odd"
 
+        self.period = period
         self.convs = nn.ModuleList()
-        in_ch = 1
-        for out_ch in channels:
+        in_chs = 1
+        out_chs = channels
+        for scale in downsample_scales:
             self.convs.append(
-                weight_norm(
+                nn.Sequential(
                     nn.Conv2d(
-                        in_ch, out_ch,
-                        kernel_size=(5, 1), stride=(3, 1), padding=(2, 0),
-                    )
+                        in_chs, out_chs,
+                        kernel_size=(kernel_sizes[0], 1),
+                        stride=(scale, 1),
+                        padding=((kernel_sizes[0] - 1) // 2, 0),
+                    ),
+                    nn.LeakyReLU(negative_slope),
                 )
             )
-            in_ch = out_ch
+            in_chs = out_chs
+            out_chs = min(out_chs * channel_increasing_factor, max_downsample_channels)
 
-        self.output_conv = weight_norm(
-            nn.Conv2d(channels[-1], 1, kernel_size=(3, 1), stride=(1, 1), padding=(1, 0))
+        # kernel_sizes[1] - 1 follows the inworld-ai/tts convention (e.g. 3→2)
+        self.output_conv = nn.Conv2d(
+            in_chs, 1,
+            kernel_size=(kernel_sizes[1] - 1, 1),
+            stride=1,
+            padding=((kernel_sizes[1] - 1) // 2, 0),
         )
+
+        if use_weight_norm:
+            self._apply_weight_norm()
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         """
@@ -57,22 +88,20 @@ class PeriodSubDiscriminator(nn.Module):
             x: (B, 1, T) waveform
 
         Returns:
-            output: discriminator output
-            fmap: list of intermediate feature maps
+            output: flattened discriminator output
+            fmap: intermediate feature maps + unflattened output_conv output
         """
         fmap = []
 
-        # Reshape to 2D: (B, 1, T) -> (B, 1, T//p, p)
         b, c, t = x.shape
         if t % self.period != 0:
-            pad_len = self.period - (t % self.period)
-            x = F.pad(x, (0, pad_len), mode="reflect")
-            t = x.shape[-1]
+            n_pad = self.period - (t % self.period)
+            x = F.pad(x, (0, n_pad), "reflect")
+            t += n_pad
         x = x.view(b, c, t // self.period, self.period)
 
-        for conv in self.convs:
-            x = conv(x)
-            x = F.leaky_relu(x, 0.1)
+        for layer in self.convs:
+            x = layer(x)
             fmap.append(x)
 
         x = self.output_conv(x)
@@ -81,19 +110,39 @@ class PeriodSubDiscriminator(nn.Module):
 
         return x, fmap
 
+    def _apply_weight_norm(self):
+        def _wn(m):
+            if isinstance(m, nn.Conv2d):
+                nn.utils.weight_norm(m)
+        self.apply(_wn)
+
 
 class MultiPeriodDiscriminator(nn.Module):
-    """Multi-Period Discriminator (MPD) from HiFi-GAN.
+    """Multi-Period Discriminator (MPD) ported from inworld-ai/tts (X-Codec-2.0, MIT).
 
-    Uses multiple sub-discriminators with different periods to capture
-    periodic patterns in the waveform at various scales.
+    Uses multiple HiFiGANPeriodDiscriminator sub-discriminators at different periods
+    to capture periodic patterns in the waveform at various temporal scales.
     """
 
-    def __init__(self, periods: List[int] = [2, 3, 5, 7, 11]):
+    def __init__(
+        self,
+        periods: List[int] = [2, 3, 5, 7, 11],
+        channels: int = 16,
+        channel_increasing_factor: int = 4,
+        max_downsample_channels: int = 512,
+        **kwargs,
+    ):
         super().__init__()
-        self.discriminators = nn.ModuleList(
-            [PeriodSubDiscriminator(p) for p in periods]
-        )
+        self.discriminators = nn.ModuleList([
+            HiFiGANPeriodDiscriminator(
+                period=p,
+                channels=channels,
+                channel_increasing_factor=channel_increasing_factor,
+                max_downsample_channels=max_downsample_channels,
+                **kwargs,
+            )
+            for p in periods
+        ])
 
     def forward(self, x: torch.Tensor) -> DiscriminatorOutput:
         """
