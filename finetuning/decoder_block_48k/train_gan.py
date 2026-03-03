@@ -29,6 +29,7 @@ import glob
 import json
 import os
 import sys
+import warnings
 from pathlib import Path
 
 import torch
@@ -40,6 +41,13 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+# Suppress MPS-backend STFT resize deprecation warning (PyTorch internal bug, harmless)
+warnings.filterwarnings(
+    "ignore",
+    message="An output with one or more elements was resized",
+    module="torch.functional",
+)
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -269,7 +277,8 @@ def create_model(args, accelerator):
         config_dict.pop(key, None)
 
     decoder_config = Qwen3TTSTokenizerV2DecoderConfig(**config_dict)
-    decoder_config._attn_implementation = "flash_attention_2"
+    if accelerator.device.type == "cuda":
+        decoder_config._attn_implementation = "flash_attention_2"
 
     accelerator.print(f"New upsample_rates: {new_upsample_rates}")
 
