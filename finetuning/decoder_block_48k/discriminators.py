@@ -272,9 +272,17 @@ def _stft_magnitude(
     Returns:
         (B, T_frames, F) magnitude spectrogram
     """
-    x_stft = torch.stft(
-        x, fft_size, hop_size, win_length, window.to(x.device), return_complex=True
-    )
+    # MPS backend has a broken STFT backward that causes Metal GPU crashes
+    # when gradients flow through torch.stft. Run STFT on CPU and move the
+    # complex result back to the original device so autograd still works.
+    if x.device.type == "mps":
+        x_stft = torch.stft(
+            x.cpu(), fft_size, hop_size, win_length, window.cpu(), return_complex=True
+        ).to(x.device)
+    else:
+        x_stft = torch.stft(
+            x, fft_size, hop_size, win_length, window.to(x.device), return_complex=True
+        )
     magnitude = torch.sqrt(
         torch.clamp(x_stft.real ** 2 + x_stft.imag ** 2, min=1e-7, max=1e3)
     )
