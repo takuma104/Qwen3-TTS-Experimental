@@ -664,12 +664,10 @@ def main():
             if training_state["scheduler_g"] and scheduler_g:
                 scheduler_g.load_state_dict(training_state["scheduler_g"])
 
-        # Temporarily disable optimizer state loading for run_gan12
-        # 
-        # # Discriminator optimizer/scheduler is always restored (unaffected by num_frozen)
-        # optimizer_d.load_state_dict(training_state["optimizer_d"])
-        # if training_state["scheduler_d"] and scheduler_d:
-        #     scheduler_d.load_state_dict(training_state["scheduler_d"])
+        # Discriminator optimizer/scheduler is always restored (unaffected by num_frozen)
+        optimizer_d.load_state_dict(training_state["optimizer_d"])
+        if training_state["scheduler_d"] and scheduler_d:
+            scheduler_d.load_state_dict(training_state["scheduler_d"])
 
         accelerator.print(f"Resumed from step {start_step}, epoch {start_epoch}")
 
