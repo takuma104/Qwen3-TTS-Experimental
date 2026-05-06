@@ -300,8 +300,4 @@ class Qwen3TTSASRWebDataset(IterableDataset):
             "labels": labels_padded,
             "text_lengths": text_lengths,
             "attention_mask": attention_mask,
-            "ids": [item["id"] for item in batch],
-            "texts": [item["text"] for item in batch],
-            "language_ids": [item["language_id"] for item in batch],
-            "speakers": [item["speaker"] for item in batch],
         }
