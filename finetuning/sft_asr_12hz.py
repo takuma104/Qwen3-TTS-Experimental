@@ -13,7 +13,7 @@ from typing import Optional
 
 import torch
 from accelerate import Accelerator
-from asr_dataset import Qwen3TTSASRWebDataset, resolve_asr_special_token_ids
+from asr_dataset import Qwen3TTSASRWebDataset, TokenBudgetBatchDataset, resolve_asr_special_token_ids
 from qwen_tts.core.models.modeling_qwen3_tts_asr import Qwen3TTSForSpeechRecognition
 from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
 from safetensors.torch import save_file
@@ -50,6 +50,26 @@ def build_asr_dataset(args, data_lst: str, processor, model_config, special_toke
         max_duration=args.max_duration,
         min_dnsmos=args.min_dnsmos,
         languages=args.languages,
+    )
+
+
+def build_dataloader(dataset, batch_size: int, max_batch_tokens: Optional[int] = None):
+    if max_batch_tokens is not None and max_batch_tokens > 0:
+        batched_dataset = TokenBudgetBatchDataset(
+            dataset,
+            max_batch_tokens=max_batch_tokens,
+            max_batch_samples=batch_size,
+        )
+        return DataLoader(
+            batched_dataset,
+            batch_size=None,
+            collate_fn=dataset.collate_fn,
+        )
+
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        collate_fn=dataset.collate_fn,
     )
 
 
@@ -119,6 +139,18 @@ def train():
     parser.add_argument("--output_dir", type=str, default="asr_output")
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--eval_batch_size", type=int, default=None)
+    parser.add_argument(
+        "--max_batch_tokens",
+        type=int,
+        default=0,
+        help="If >0, dynamically batches by padded token budget: batch_size * (max_audio_len + max_text_len).",
+    )
+    parser.add_argument(
+        "--eval_max_batch_tokens",
+        type=int,
+        default=None,
+        help="Eval padded token budget. Defaults to --max_batch_tokens when omitted.",
+    )
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--num_epochs", type=int, default=1)
@@ -151,6 +183,8 @@ def train():
         args.languages = None
     if args.eval_batch_size is None:
         args.eval_batch_size = args.batch_size
+    if args.eval_max_batch_tokens is None:
+        args.eval_max_batch_tokens = args.max_batch_tokens
     if args.wandb_mode is not None:
         os.environ["WANDB_MODE"] = args.wandb_mode
 
@@ -211,10 +245,10 @@ def train():
         qwen3tts.model.config,
         special_token_ids,
     )
-    dataloader = DataLoader(
+    dataloader = build_dataloader(
         dataset,
         batch_size=args.batch_size,
-        collate_fn=dataset.collate_fn,
+        max_batch_tokens=args.max_batch_tokens,
     )
     eval_dataloader = None
     if args.eval_data_lst:
@@ -225,10 +259,10 @@ def train():
             qwen3tts.model.config,
             special_token_ids,
         )
-        eval_dataloader = DataLoader(
+        eval_dataloader = build_dataloader(
             eval_dataset,
             batch_size=args.eval_batch_size,
-            collate_fn=eval_dataset.collate_fn,
+            max_batch_tokens=args.eval_max_batch_tokens,
         )
 
     trainable_parameters = [parameter for parameter in asr_model.parameters() if parameter.requires_grad]
@@ -281,6 +315,15 @@ def train():
 
             batch_audio_tokens = accelerator.reduce(batch["audio_lengths"].sum(), reduction="sum").item()
             batch_text_tokens = accelerator.reduce((batch["labels"] != -100).sum(), reduction="sum").item()
+            batch_padded_tokens = accelerator.reduce(
+                torch.tensor(
+                    batch["audio_codes"].shape[0]
+                    * (batch["audio_codes"].shape[1] + batch["decoder_input_ids"].shape[1]),
+                    device=accelerator.device,
+                    dtype=torch.long,
+                ),
+                reduction="sum",
+            ).item()
             batch_samples = accelerator.reduce(
                 torch.tensor(batch["audio_codes"].shape[0], device=accelerator.device, dtype=torch.long),
                 reduction="sum",
@@ -298,6 +341,7 @@ def train():
                     "train/samples": train_samples,
                     "train/batch_audio_tokens": batch_audio_tokens,
                     "train/batch_text_tokens": batch_text_tokens,
+                    "train/batch_padded_tokens": batch_padded_tokens,
                     "train/batch_samples": batch_samples,
                     "train/epoch": epoch,
                     "train/lr": get_lr(optimizer, args.lr),
@@ -368,6 +412,8 @@ def save_checkpoint(accelerator: Accelerator, model, output_dir: str, name: str,
         "use_acoustic_codebooks": args.use_acoustic_codebooks,
         "freeze_talker": args.freeze_talker,
         "eval_data_lst": args.eval_data_lst,
+        "max_batch_tokens": args.max_batch_tokens,
+        "eval_max_batch_tokens": args.eval_max_batch_tokens,
     }
     with open(checkpoint_dir / "asr_training_config.json", "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)

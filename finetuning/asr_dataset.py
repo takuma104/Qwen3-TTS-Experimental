@@ -301,3 +301,61 @@ class Qwen3TTSASRWebDataset(IterableDataset):
             "text_lengths": text_lengths,
             "attention_mask": attention_mask,
         }
+
+
+class TokenBudgetBatchDataset(IterableDataset):
+    """Group iterable ASR samples into batches bounded by padded token count."""
+
+    def __init__(
+        self,
+        dataset: IterableDataset,
+        *,
+        max_batch_tokens: int,
+        max_batch_samples: Optional[int] = None,
+    ):
+        if max_batch_tokens <= 0:
+            raise ValueError("max_batch_tokens must be positive")
+        self.dataset = dataset
+        self.max_batch_tokens = int(max_batch_tokens)
+        self.max_batch_samples = int(max_batch_samples) if max_batch_samples and max_batch_samples > 0 else None
+
+    @staticmethod
+    def _sample_lengths(sample: Dict[str, Any]) -> tuple[int, int]:
+        audio_len = int(sample["audio_codes"].shape[0])
+        text_len = int(sample["text_ids"].shape[0])
+        return audio_len, text_len
+
+    @staticmethod
+    def _padded_token_count(batch_size: int, max_audio_len: int, max_text_len: int) -> int:
+        return batch_size * (max_audio_len + max_text_len)
+
+    def __iter__(self) -> Iterator[List[Dict[str, Any]]]:
+        batch: List[Dict[str, Any]] = []
+        max_audio_len = 0
+        max_text_len = 0
+
+        for sample in self.dataset:
+            audio_len, text_len = self._sample_lengths(sample)
+            next_batch_size = len(batch) + 1
+            next_max_audio_len = max(max_audio_len, audio_len)
+            next_max_text_len = max(max_text_len, text_len)
+            next_token_count = self._padded_token_count(
+                next_batch_size,
+                next_max_audio_len,
+                next_max_text_len,
+            )
+            exceeds_token_budget = next_token_count > self.max_batch_tokens
+            exceeds_sample_budget = self.max_batch_samples is not None and next_batch_size > self.max_batch_samples
+
+            if batch and (exceeds_token_budget or exceeds_sample_budget):
+                yield batch
+                batch = []
+                max_audio_len = 0
+                max_text_len = 0
+
+            batch.append(sample)
+            max_audio_len = max(max_audio_len, audio_len)
+            max_text_len = max(max_text_len, text_len)
+
+        if batch:
+            yield batch
