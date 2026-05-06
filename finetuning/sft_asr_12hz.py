@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from typing import Optional
 
 import torch
 from accelerate import Accelerator
@@ -32,13 +33,92 @@ def parse_dtype(dtype: str):
     raise ValueError(f"Unsupported dtype: {dtype}")
 
 
+def parse_report_to(report_to: str):
+    trackers = [item.strip() for item in report_to.split(",") if item.strip()]
+    if not trackers or trackers == ["none"]:
+        return None
+    return trackers
+
+
+def build_asr_dataset(args, data_lst: str, processor, model_config, special_token_ids):
+    return Qwen3TTSASRWebDataset(
+        data_lst,
+        processor,
+        model_config=model_config,
+        special_token_ids=special_token_ids,
+        min_duration=args.min_duration,
+        max_duration=args.max_duration,
+        min_dnsmos=args.min_dnsmos,
+        languages=args.languages,
+    )
+
+
+def get_lr(optimizer, default_lr: float) -> float:
+    param_groups = getattr(optimizer, "param_groups", None)
+    if param_groups:
+        return float(param_groups[0]["lr"])
+    wrapped_optimizer = getattr(optimizer, "optimizer", None)
+    param_groups = getattr(wrapped_optimizer, "param_groups", None)
+    if param_groups:
+        return float(param_groups[0]["lr"])
+    return float(default_lr)
+
+
+@torch.no_grad()
+def evaluate(asr_model, dataloader, accelerator: Accelerator, max_eval_batches: Optional[int] = None):
+    was_training = asr_model.training
+    asr_model.eval()
+
+    device = accelerator.device
+    loss_sum = torch.tensor(0.0, device=device)
+    text_token_count = torch.tensor(0, device=device, dtype=torch.long)
+    audio_token_count = torch.tensor(0, device=device, dtype=torch.long)
+    sample_count = torch.tensor(0, device=device, dtype=torch.long)
+
+    for batch_idx, batch in enumerate(dataloader):
+        if max_eval_batches is not None and max_eval_batches > 0 and batch_idx >= max_eval_batches:
+            break
+
+        outputs = asr_model(
+            audio_codes=batch["audio_codes"],
+            decoder_input_ids=batch["decoder_input_ids"],
+            labels=batch["labels"],
+            attention_mask=batch["attention_mask"],
+        )
+        batch_text_tokens = (batch["labels"] != -100).sum()
+        batch_audio_tokens = batch["audio_lengths"].sum()
+        loss_sum += outputs.loss.detach() * batch_text_tokens
+        text_token_count += batch_text_tokens
+        audio_token_count += batch_audio_tokens
+        sample_count += torch.tensor(batch["audio_codes"].shape[0], device=device, dtype=torch.long)
+
+    loss_sum = accelerator.reduce(loss_sum, reduction="sum")
+    text_token_count = accelerator.reduce(text_token_count, reduction="sum")
+    audio_token_count = accelerator.reduce(audio_token_count, reduction="sum")
+    sample_count = accelerator.reduce(sample_count, reduction="sum")
+
+    eval_loss = loss_sum / text_token_count.clamp_min(1)
+    metrics = {
+        "eval/loss": eval_loss.item(),
+        "eval/text_tokens": text_token_count.item(),
+        "eval/audio_tokens": audio_token_count.item(),
+        "eval/samples": sample_count.item(),
+    }
+
+    if was_training:
+        asr_model.train()
+    return metrics
+
+
 def train():
     parser = argparse.ArgumentParser()
     parser.add_argument("--init_tts_model_path", type=str, default="Qwen/Qwen3-TTS-12Hz-0.6B-Base")
     parser.add_argument("--qwen3_model_path", type=str, default="Qwen/Qwen3-0.6B")
     parser.add_argument("--data_lst", type=str, required=True)
+    parser.add_argument("--eval_data_lst", type=str, default=None)
     parser.add_argument("--output_dir", type=str, default="asr_output")
     parser.add_argument("--batch_size", type=int, default=2)
+    parser.add_argument("--eval_batch_size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--num_epochs", type=int, default=1)
@@ -54,14 +134,41 @@ def train():
     parser.add_argument("--min_dnsmos", type=float, default=None)
     parser.add_argument("--languages", type=str, default=None, help="Comma-separated language filter, e.g. ja,en")
     parser.add_argument("--save_every_steps", type=int, default=1000)
+    parser.add_argument("--logging_steps", type=int, default=10)
+    parser.add_argument("--eval_every_steps", type=int, default=0)
+    parser.add_argument("--eval_every_epochs", type=int, default=1)
+    parser.add_argument("--eval_at_start", action="store_true")
+    parser.add_argument("--max_eval_batches", type=int, default=-1)
+    parser.add_argument("--report_to", type=str, default="tensorboard", help="Comma-separated trackers, e.g. tensorboard,wandb or none")
+    parser.add_argument("--wandb_project", type=str, default="qwen3-tts-asr")
+    parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument("--wandb_mode", type=str, default=None, choices=["online", "offline", "disabled"])
     args = parser.parse_args()
+
+    if args.languages:
+        args.languages = [item.strip() for item in args.languages.split(",") if item.strip()]
+    else:
+        args.languages = None
+    if args.eval_batch_size is None:
+        args.eval_batch_size = args.batch_size
+    if args.wandb_mode is not None:
+        os.environ["WANDB_MODE"] = args.wandb_mode
 
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
-        log_with="tensorboard",
+        log_with=parse_report_to(args.report_to),
         project_dir=args.output_dir,
     )
+    tracker_init_kwargs = {}
+    if args.wandb_run_name:
+        tracker_init_kwargs["wandb"] = {"name": args.wandb_run_name}
+    if parse_report_to(args.report_to) is not None:
+        accelerator.init_trackers(
+            project_name=args.wandb_project,
+            config=vars(args),
+            init_kwargs=tracker_init_kwargs,
+        )
 
     dtype = parse_dtype(args.dtype)
     qwen3tts = Qwen3TTSModel.from_pretrained(
@@ -97,33 +204,63 @@ def train():
     if args.freeze_talker:
         asr_model.freeze_talker()
 
-    languages = None
-    if args.languages:
-        languages = [item.strip() for item in args.languages.split(",") if item.strip()]
-
-    dataset = Qwen3TTSASRWebDataset(
+    dataset = build_asr_dataset(
+        args,
         args.data_lst,
         qwen3tts.processor,
-        model_config=qwen3tts.model.config,
-        special_token_ids=special_token_ids,
-        min_duration=args.min_duration,
-        max_duration=args.max_duration,
-        min_dnsmos=args.min_dnsmos,
-        languages=languages,
+        qwen3tts.model.config,
+        special_token_ids,
     )
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
         collate_fn=dataset.collate_fn,
     )
+    eval_dataloader = None
+    if args.eval_data_lst:
+        eval_dataset = build_asr_dataset(
+            args,
+            args.eval_data_lst,
+            qwen3tts.processor,
+            qwen3tts.model.config,
+            special_token_ids,
+        )
+        eval_dataloader = DataLoader(
+            eval_dataset,
+            batch_size=args.eval_batch_size,
+            collate_fn=eval_dataset.collate_fn,
+        )
 
     trainable_parameters = [parameter for parameter in asr_model.parameters() if parameter.requires_grad]
     optimizer = AdamW(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
 
-    asr_model, optimizer, dataloader = accelerator.prepare(asr_model, optimizer, dataloader)
+    if eval_dataloader is not None:
+        asr_model, optimizer, dataloader, eval_dataloader = accelerator.prepare(
+            asr_model,
+            optimizer,
+            dataloader,
+            eval_dataloader,
+        )
+    else:
+        asr_model, optimizer, dataloader = accelerator.prepare(asr_model, optimizer, dataloader)
     asr_model.train()
 
     global_step = 0
+    train_audio_tokens = 0
+    train_text_tokens = 0
+    train_samples = 0
+
+    if eval_dataloader is not None and args.eval_at_start:
+        metrics = evaluate(
+            asr_model,
+            eval_dataloader,
+            accelerator,
+            max_eval_batches=args.max_eval_batches,
+        )
+        accelerator.log(metrics, step=global_step)
+        accelerator.print(f"eval step={global_step} loss={metrics['eval/loss']:.4f}")
+        asr_model.train()
+
     for epoch in range(args.num_epochs):
         for batch in dataloader:
             with accelerator.accumulate(asr_model):
@@ -142,8 +279,50 @@ def train():
                 optimizer.step()
                 optimizer.zero_grad()
 
-            if global_step % 10 == 0:
-                accelerator.print(f"epoch={epoch} step={global_step} loss={loss.item():.4f}")
+            batch_audio_tokens = accelerator.reduce(batch["audio_lengths"].sum(), reduction="sum").item()
+            batch_text_tokens = accelerator.reduce((batch["labels"] != -100).sum(), reduction="sum").item()
+            batch_samples = accelerator.reduce(
+                torch.tensor(batch["audio_codes"].shape[0], device=accelerator.device, dtype=torch.long),
+                reduction="sum",
+            ).item()
+            train_loss = accelerator.reduce(loss.detach(), reduction="mean").item()
+            train_audio_tokens += batch_audio_tokens
+            train_text_tokens += batch_text_tokens
+            train_samples += batch_samples
+
+            if args.logging_steps > 0 and global_step % args.logging_steps == 0:
+                train_metrics = {
+                    "train/loss": train_loss,
+                    "train/audio_tokens": train_audio_tokens,
+                    "train/text_tokens": train_text_tokens,
+                    "train/samples": train_samples,
+                    "train/batch_audio_tokens": batch_audio_tokens,
+                    "train/batch_text_tokens": batch_text_tokens,
+                    "train/batch_samples": batch_samples,
+                    "train/epoch": epoch,
+                    "train/lr": get_lr(optimizer, args.lr),
+                }
+                accelerator.log(train_metrics, step=global_step)
+                accelerator.print(
+                    f"epoch={epoch} step={global_step} loss={train_loss:.4f} "
+                    f"audio_tokens={train_audio_tokens} text_tokens={train_text_tokens}"
+                )
+
+            if (
+                eval_dataloader is not None
+                and args.eval_every_steps > 0
+                and global_step > 0
+                and global_step % args.eval_every_steps == 0
+            ):
+                metrics = evaluate(
+                    asr_model,
+                    eval_dataloader,
+                    accelerator,
+                    max_eval_batches=args.max_eval_batches,
+                )
+                accelerator.log(metrics, step=global_step)
+                accelerator.print(f"eval step={global_step} loss={metrics['eval/loss']:.4f}")
+                asr_model.train()
 
             if args.save_every_steps > 0 and global_step > 0 and global_step % args.save_every_steps == 0:
                 save_checkpoint(accelerator, asr_model, args.output_dir, f"checkpoint-step-{global_step}", args)
@@ -153,8 +332,24 @@ def train():
                 break
 
         save_checkpoint(accelerator, asr_model, args.output_dir, f"checkpoint-epoch-{epoch}", args)
+        if (
+            eval_dataloader is not None
+            and args.eval_every_epochs > 0
+            and (epoch + 1) % args.eval_every_epochs == 0
+        ):
+            metrics = evaluate(
+                asr_model,
+                eval_dataloader,
+                accelerator,
+                max_eval_batches=args.max_eval_batches,
+            )
+            accelerator.log(metrics, step=global_step)
+            accelerator.print(f"eval epoch={epoch} step={global_step} loss={metrics['eval/loss']:.4f}")
+            asr_model.train()
         if args.max_steps > 0 and global_step >= args.max_steps:
             break
+
+    accelerator.end_training()
 
 
 def save_checkpoint(accelerator: Accelerator, model, output_dir: str, name: str, args):
@@ -172,6 +367,7 @@ def save_checkpoint(accelerator: Accelerator, model, output_dir: str, name: str,
         "qwen3_model_path": args.qwen3_model_path,
         "use_acoustic_codebooks": args.use_acoustic_codebooks,
         "freeze_talker": args.freeze_talker,
+        "eval_data_lst": args.eval_data_lst,
     }
     with open(checkpoint_dir / "asr_training_config.json", "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)

@@ -27,6 +27,7 @@ dependencies = [
   "torchaudio==2.10",
   "soundfile",
   "sox",
+  "wandb",
   "onnxruntime",
   "einops",
   "flash-attn; sys_platform == 'linux'",
