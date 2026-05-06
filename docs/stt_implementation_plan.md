@@ -369,6 +369,35 @@ Qwen3-TTS 既存 `text_embedding` は 2048 次元で、Qwen3-0.6B embedding は 
 8. all-codebook ablation。
 9. generation API と簡易 CLI を追加。
 
+## 現在の実装状況
+
+初期実装として以下を追加済み。
+
+- `qwen_tts/core/models/modeling_qwen3_tts_asr.py`
+  - `Qwen3TTSForSpeechRecognition`
+  - Qwen3 text embedding/head ロード helper
+  - codebook0 only / all-codebook sum の speech embedding builder
+  - teacher-forcing forward と greedy generation
+- `finetuning/asr_dataset.py`
+  - `data.lst` reader
+  - tar shard + JSONL metadata を読む `IterableDataset`
+  - `.npy` shape `[16, T]` から internal shape `[T, 16]` への変換
+  - ASR teacher-forcing 用 collator
+- `finetuning/sft_asr_12hz.py`
+  - WebDataset shard から直接 SFT する実験用 training entrypoint
+
+初期 training 例:
+
+```bash
+python finetuning/sft_asr_12hz.py \
+  --init_tts_model_path Qwen/Qwen3-TTS-12Hz-0.6B-Base \
+  --qwen3_model_path Qwen/Qwen3-0.6B \
+  --data_lst /path/to/output_dir/data.lst \
+  --output_dir asr_output \
+  --batch_size 2 \
+  --num_epochs 1
+```
+
 ## メモ
 
 STT 化の本質は「TTS を逆再生する」ことではなく、「Qwen3-TTS が持つ text/semantic token alignment と Qwen3 の text prior を ASR の初期値として使う」こと。したがって、最初から既存 TTS generation path を無理に反転させるより、ASR 専用 wrapper と training script を追加する方が実装と評価が明確になる。

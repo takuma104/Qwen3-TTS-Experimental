@@ -15,4 +15,5 @@
 # limitations under the License.
 from .configuration_qwen3_tts import Qwen3TTSConfig
 from .modeling_qwen3_tts import Qwen3TTSForConditionalGeneration
+from .modeling_qwen3_tts_asr import Qwen3TTSForSpeechRecognition
 from .processing_qwen3_tts import Qwen3TTSProcessor
