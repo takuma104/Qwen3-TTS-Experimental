@@ -24,11 +24,13 @@ dependencies = [
   "accelerate==1.12.0",
   "gradio",
   "librosa",
-  "torchaudio",
+  "torchaudio==2.10",
   "soundfile",
   "sox",
   "onnxruntime",
   "einops",
+  "flash-attn; sys_platform == 'linux'",
+  "torch==2.10",
 ]
 
 [project.urls]
@@ -44,3 +46,7 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 qwen_tts = ["py.typed", "**/*.npz"]
+
+[tool.uv.sources]
+# third-party whl: https://github.com/Dao-AILab/flash-attention/issues/2299
+flash-attn = { url = "https://github.com/lesj0610/flash-attention/releases/download/v2.8.3-cu12-torch2.10-cp312/flash_attn-2.8.3%2Bcu12torch2.10cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }

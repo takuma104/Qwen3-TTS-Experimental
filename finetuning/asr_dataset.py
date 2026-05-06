@@ -26,6 +26,13 @@ class ASRShard:
     total_duration: float
 
 
+@dataclass(frozen=True)
+class ASRSpecialTokenIds:
+    bos_token_id: int
+    eos_token_id: Optional[int]
+    pad_token_id: int
+
+
 def read_data_lst(data_lst: str | Path) -> List[ASRShard]:
     shards: List[ASRShard] = []
     with open(data_lst, "r", encoding="utf-8") as f:
@@ -48,6 +55,68 @@ def read_data_lst(data_lst: str | Path) -> List[ASRShard]:
     return shards
 
 
+def _resolve_token_id(tokenizer, model_config, *, attr_names: Iterable[str], token_strings: Iterable[str]) -> Optional[int]:
+    for obj in (tokenizer, model_config):
+        if obj is None:
+            continue
+        for attr_name in attr_names:
+            value = getattr(obj, attr_name, None)
+            if value is not None:
+                return int(value)
+
+    convert_tokens_to_ids = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if callable(convert_tokens_to_ids):
+        unk_token_id = getattr(tokenizer, "unk_token_id", None)
+        for token in token_strings:
+            try:
+                token_id = convert_tokens_to_ids(token)
+            except Exception:
+                continue
+            if token_id is None:
+                continue
+            token_id = int(token_id)
+            if unk_token_id is not None and token_id == int(unk_token_id):
+                continue
+            return token_id
+
+    return None
+
+
+def resolve_asr_special_token_ids(processor, model_config=None) -> ASRSpecialTokenIds:
+    tokenizer = getattr(processor, "tokenizer", processor)
+
+    bos_token_id = _resolve_token_id(
+        tokenizer,
+        model_config,
+        attr_names=("bos_token_id", "im_start_token_id"),
+        token_strings=("<|im_start|>",),
+    )
+    if bos_token_id is None:
+        raise ValueError("Unable to resolve ASR BOS token id from tokenizer or model config.")
+
+    eos_token_id = _resolve_token_id(
+        tokenizer,
+        model_config,
+        attr_names=("eos_token_id", "im_end_token_id"),
+        token_strings=("<|im_end|>",),
+    )
+
+    pad_token_id = _resolve_token_id(
+        tokenizer,
+        model_config,
+        attr_names=("pad_token_id", "tts_pad_token_id"),
+        token_strings=(),
+    )
+    if pad_token_id is None:
+        pad_token_id = eos_token_id if eos_token_id is not None else bos_token_id
+
+    return ASRSpecialTokenIds(
+        bos_token_id=bos_token_id,
+        eos_token_id=eos_token_id,
+        pad_token_id=pad_token_id,
+    )
+
+
 class Qwen3TTSASRWebDataset(IterableDataset):
     """
     Stream Qwen3-TTS-Tokenizer-12Hz token shards.
@@ -63,6 +132,8 @@ class Qwen3TTSASRWebDataset(IterableDataset):
         data_lst: str | Path,
         processor,
         *,
+        model_config=None,
+        special_token_ids: Optional[ASRSpecialTokenIds] = None,
         add_eos_token: bool = True,
         min_duration: Optional[float] = None,
         max_duration: Optional[float] = None,
@@ -79,13 +150,13 @@ class Qwen3TTSASRWebDataset(IterableDataset):
 
         tokenizer = getattr(processor, "tokenizer", processor)
         self.tokenizer = tokenizer
-        self.eos_token_id = tokenizer.eos_token_id
-        self.pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
-        self.bos_token_id = tokenizer.bos_token_id
-        if self.bos_token_id is None:
-            self.bos_token_id = getattr(tokenizer, "im_start_token_id", None)
-        if self.bos_token_id is None:
-            raise ValueError("Tokenizer must provide bos_token_id or im_start_token_id for ASR decoder input.")
+        resolved_special_tokens = special_token_ids or resolve_asr_special_token_ids(
+            processor,
+            model_config=model_config,
+        )
+        self.bos_token_id = resolved_special_tokens.bos_token_id
+        self.eos_token_id = resolved_special_tokens.eos_token_id
+        self.pad_token_id = resolved_special_tokens.pad_token_id
 
     def _iter_worker_shards(self) -> Iterator[ASRShard]:
         worker_info = get_worker_info()

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import torch
 from accelerate import Accelerator
-from asr_dataset import Qwen3TTSASRWebDataset
+from asr_dataset import Qwen3TTSASRWebDataset, resolve_asr_special_token_ids
 from qwen_tts.core.models.modeling_qwen3_tts_asr import Qwen3TTSForSpeechRecognition
 from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
 from safetensors.torch import save_file
@@ -70,13 +70,22 @@ def train():
         attn_implementation=args.attn_implementation,
     )
 
-    tokenizer = qwen3tts.processor.tokenizer
+    special_token_ids = resolve_asr_special_token_ids(
+        qwen3tts.processor,
+        model_config=qwen3tts.model.config,
+    )
+    accelerator.print(
+        "Resolved ASR special tokens: "
+        f"bos={special_token_ids.bos_token_id} "
+        f"eos={special_token_ids.eos_token_id} "
+        f"pad={special_token_ids.pad_token_id}"
+    )
     asr_model = Qwen3TTSForSpeechRecognition(
         qwen3tts.model,
         use_acoustic_codebooks=args.use_acoustic_codebooks,
-        asr_bos_token_id=tokenizer.bos_token_id,
-        asr_eos_token_id=tokenizer.eos_token_id,
-        asr_pad_token_id=tokenizer.pad_token_id,
+        asr_bos_token_id=special_token_ids.bos_token_id,
+        asr_eos_token_id=special_token_ids.eos_token_id,
+        asr_pad_token_id=special_token_ids.pad_token_id,
     )
     load_info = asr_model.load_qwen3_text_weights(
         args.qwen3_model_path,
@@ -95,6 +104,8 @@ def train():
     dataset = Qwen3TTSASRWebDataset(
         args.data_lst,
         qwen3tts.processor,
+        model_config=qwen3tts.model.config,
+        special_token_ids=special_token_ids,
         min_duration=args.min_duration,
         max_duration=args.max_duration,
         min_dnsmos=args.min_dnsmos,
