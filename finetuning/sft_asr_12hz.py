@@ -175,6 +175,15 @@ def train():
     parser.add_argument("--wandb_project", type=str, default="qwen3-tts-asr")
     parser.add_argument("--wandb_run_name", type=str, default=None)
     parser.add_argument("--wandb_mode", type=str, default=None, choices=["online", "offline", "disabled"])
+    parser.add_argument("--use_8bit_optimizer", action="store_true")
+    # parser.add_argument("--use_torch_compile", action="store_true")
+    # parser.add_argument(
+    #     "--torch_compile_mode",
+    #     type=str,
+    #     default="reduce-overhead",
+    #     choices=["default", "reduce-overhead", "max-autotune"],
+    #     help="torch.compile mode (default: reduce-overhead)",
+    # )
     args = parser.parse_args()
 
     if args.languages:
@@ -238,6 +247,12 @@ def train():
     if args.freeze_talker:
         asr_model.freeze_talker()
 
+    # if args.use_torch_compile:
+    #     asr_model.talker.model = torch.compile(asr_model.talker.model, 
+    #                                            mode=args.torch_compile_mode, 
+    #                                            fullgraph=False)  # Allow graph breaks for compatibility
+    #     accelerator.print("Applied torch.compile to talker model.") 
+
     dataset = build_asr_dataset(
         args,
         args.data_lst,
@@ -266,7 +281,13 @@ def train():
         )
 
     trainable_parameters = [parameter for parameter in asr_model.parameters() if parameter.requires_grad]
-    optimizer = AdamW(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
+
+    if args.use_8bit_optimizer:
+        import bitsandbytes as bnb
+        accelerator.print("Using 8-bit AdamW optimizer from bitsandbytes.")
+        optimizer = bnb.optim.AdamW8bit(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        optimizer = AdamW(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
 
     if eval_dataloader is not None:
         asr_model, optimizer, dataloader, eval_dataloader = accelerator.prepare(
@@ -297,6 +318,7 @@ def train():
 
     for epoch in range(args.num_epochs):
         for batch in dataloader:
+            last_grad_norm = 0.0
             with accelerator.accumulate(asr_model):
                 outputs = asr_model(
                     audio_codes=batch["audio_codes"],
@@ -308,7 +330,9 @@ def train():
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(asr_model.parameters(), 1.0)
+                    grad_norm = accelerator.clip_grad_norm_(asr_model.parameters(), 1.0)
+                    grad_norm = (grad_norm.item() if grad_norm is not None else 0.0)
+                    last_grad_norm = grad_norm
 
                 optimizer.step()
                 optimizer.zero_grad()
@@ -345,6 +369,7 @@ def train():
                     "train/batch_samples": batch_samples,
                     "train/epoch": epoch,
                     "train/lr": get_lr(optimizer, args.lr),
+                    "train/grad_norm": last_grad_norm,
                 }
                 accelerator.log(train_metrics, step=global_step)
                 accelerator.print(
