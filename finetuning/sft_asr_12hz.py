@@ -316,9 +316,9 @@ def train():
         accelerator.print(f"eval step={global_step} loss={metrics['eval/loss']:.4f}")
         asr_model.train()
 
+    last_grad_norm = 0.0
     for epoch in range(args.num_epochs):
         for batch in dataloader:
-            last_grad_norm = 0.0
             with accelerator.accumulate(asr_model):
                 outputs = asr_model(
                     audio_codes=batch["audio_codes"],
@@ -331,11 +331,9 @@ def train():
 
                 if accelerator.sync_gradients:
                     grad_norm = accelerator.clip_grad_norm_(asr_model.parameters(), 1.0)
-                    grad_norm = (grad_norm.item() if grad_norm is not None else 0.0)
-                    last_grad_norm = grad_norm
-
-                optimizer.step()
-                optimizer.zero_grad()
+                    last_grad_norm = grad_norm.item() if grad_norm is not None else 0.0
+                    optimizer.step()
+                    optimizer.zero_grad()
 
             batch_audio_tokens = accelerator.reduce(batch["audio_lengths"].sum(), reduction="sum").item()
             batch_text_tokens = accelerator.reduce((batch["labels"] != -100).sum(), reduction="sum").item()
@@ -356,6 +354,9 @@ def train():
             train_audio_tokens += batch_audio_tokens
             train_text_tokens += batch_text_tokens
             train_samples += batch_samples
+
+            if not accelerator.sync_gradients:
+                continue
 
             if args.logging_steps > 0 and global_step % args.logging_steps == 0:
                 train_metrics = {
