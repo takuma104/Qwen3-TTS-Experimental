@@ -29,7 +29,7 @@ from torch.utils.data import DataLoader
 # LoRA targets the Talker body only — code_predictor layers share the same
 # projection names but live under a different parent and must be excluded.
 DEFAULT_LORA_TARGET_REGEX = (
-    r"^talker\.model\.layers\.\d+\.(self_attn|mlp)\."
+    r"^tts_model\.talker\.model\.layers\.\d+\.(self_attn|mlp)\."
     r"(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$"
 )
 DEFAULT_MODULES_TO_SAVE = ("asr_text_embedding", "text_head")
