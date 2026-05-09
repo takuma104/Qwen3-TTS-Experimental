@@ -25,6 +25,7 @@ from qwen_tts.core.models.modeling_qwen3_tts_asr import Qwen3TTSForSpeechRecogni
 from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 # LoRA targets the Talker body only — code_predictor layers share the same
 # projection names but live under a different parent and must be excluded.
@@ -367,6 +368,9 @@ def train():
         accelerator.print(f"eval step={global_step} loss={metrics['eval/loss']:.4f}")
         asr_model.train()
 
+    if accelerator.is_main_process:
+        progress_bar = tqdm(desc="Training", unit="step")
+
     last_grad_norm = 0.0
     for epoch in range(args.num_epochs):
         for batch in dataloader:
@@ -424,10 +428,6 @@ def train():
                     "train/grad_norm": last_grad_norm,
                 }
                 accelerator.log(train_metrics, step=global_step)
-                accelerator.print(
-                    f"epoch={epoch} step={global_step} loss={train_loss:.4f} "
-                    f"audio_tokens={train_audio_tokens} text_tokens={train_text_tokens}"
-                )
 
             if (
                 eval_dataloader is not None
@@ -442,13 +442,20 @@ def train():
                     max_eval_batches=args.max_eval_batches,
                 )
                 accelerator.log(metrics, step=global_step)
-                accelerator.print(f"eval step={global_step} loss={metrics['eval/loss']:.4f}")
+                if accelerator.is_main_process:
+                    progress_bar.write(f"eval step={global_step} loss={metrics['eval/loss']:.4f}")
                 asr_model.train()
 
             if args.save_every_steps > 0 and global_step > 0 and global_step % args.save_every_steps == 0:
                 save_checkpoint(accelerator, asr_model, args.output_dir, f"checkpoint-step-{global_step}", args)
 
             global_step += 1
+            if accelerator.is_main_process:
+                progress_bar.update(1)
+                progress_bar.set_postfix({"loss": f"{train_loss:.4f}", 
+                                        "lr": f"{get_lr(optimizer, args.lr):.2e}", 
+                                        "grad_norm": f"{last_grad_norm:.2f}",
+                                        "audid_dur": f"{train_audio_tokens / 12.5 / 3600.0:.1f}h"})
             if args.max_steps > 0 and global_step >= args.max_steps:
                 break
 
@@ -465,7 +472,8 @@ def train():
                 max_eval_batches=args.max_eval_batches,
             )
             accelerator.log(metrics, step=global_step)
-            accelerator.print(f"eval epoch={epoch} step={global_step} loss={metrics['eval/loss']:.4f}")
+            if accelerator.is_main_process:
+                progress_bar.write(f"eval epoch={epoch} step={global_step} loss={metrics['eval/loss']:.4f}")
             asr_model.train()
         if args.max_steps > 0 and global_step >= args.max_steps:
             break
