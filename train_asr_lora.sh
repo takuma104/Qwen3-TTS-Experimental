@@ -1,22 +1,26 @@
 #!/bin/bash
 
-uv run finetuning/sft_asr_12hz.py \
+uv run finetuning/sft_asr_12hz_lora.py \
   --init_tts_model_path Qwen/Qwen3-TTS-12Hz-0.6B-Base \
   --qwen3_model_path Qwen/Qwen3-0.6B \
   --data_lst /mnt/artifacts/qwen3-tts-stt/gg_webdataset/train/data.lst \
   --eval_data_lst /mnt/artifacts/qwen3-tts-stt/gg_webdataset/val/data.lst \
   --report_to wandb \
-  --output_dir output/run2 \
+  --output_dir output/run7 \
   --use_acoustic_codebooks \
   --lr 1e-4 \
   --batch_size 64 \
-  --max_batch_tokens 6000 \
-  --eval_max_batch_tokens 6000 \
+  --max_batch_tokens 4000 \
+  --eval_max_batch_tokens 4000 \
+  --gradient_accumulation_steps 2 \
   --max_duration 20.0 \
   --min_duration 1.0 \
   --wandb_project qwen3-tts-asr \
-  --wandb_run_name Run2 \
+  --wandb_run_name Run7 \
   --eval_every_steps 1000 \
   --save_every_steps 10000 \
   --max_eval_batches 1000 \
-  --num_epochs 10000
+  --num_epochs 100 \
+  --use_8bit_optimizer \
+  --lora_r 128 \
+  --lora_alpha 256

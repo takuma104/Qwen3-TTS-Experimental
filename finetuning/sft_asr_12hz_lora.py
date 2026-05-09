@@ -333,6 +333,13 @@ def train():
         )
 
     trainable_parameters = [parameter for parameter in asr_model.parameters() if parameter.requires_grad]
+    if accelerator.is_main_process:
+        accelerator.print("Trainable parameters:")
+        for name, param in asr_model.named_parameters():
+            if param.requires_grad:
+                accelerator.print(f"  {name}: {param.numel() / 1e6:.2f}M parameters")
+        total_trainable_params = sum(p.numel() for p in trainable_parameters)
+        accelerator.print(f"Total trainable parameters: {total_trainable_params / 1e6:.2f}M")
 
     if args.use_8bit_optimizer:
         import bitsandbytes as bnb
