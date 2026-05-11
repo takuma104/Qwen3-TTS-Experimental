@@ -33,7 +33,12 @@ DEFAULT_LORA_TARGET_REGEX = (
     r"^tts_model\.talker\.model\.layers\.\d+\.(self_attn|mlp)\."
     r"(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$"
 )
+# Default modules kept fully trainable when NOT using TTS text embedding path.
 DEFAULT_MODULES_TO_SAVE = ("asr_text_embedding", "text_head")
+# Default modules kept fully trainable when using TTS text embedding (finetune).
+DEFAULT_MODULES_TO_SAVE_TTS_EMBED = ("text_embedding", "text_projection", "text_head")
+# Default modules when using TTS text embedding frozen.
+DEFAULT_MODULES_TO_SAVE_TTS_EMBED_FROZEN = ("text_head",)
 
 
 def parse_dtype(dtype: str):
@@ -55,9 +60,21 @@ def parse_report_to(report_to: str):
     return trackers
 
 
-def parse_modules_to_save(value: Optional[str]) -> Optional[List[str]]:
+def _default_modules_to_save(use_tts_text_embedding: bool, freeze_tts_text_embedding: bool) -> tuple:
+    if use_tts_text_embedding:
+        if freeze_tts_text_embedding:
+            return DEFAULT_MODULES_TO_SAVE_TTS_EMBED_FROZEN
+        return DEFAULT_MODULES_TO_SAVE_TTS_EMBED
+    return DEFAULT_MODULES_TO_SAVE
+
+
+def parse_modules_to_save(
+    value: Optional[str],
+    use_tts_text_embedding: bool = False,
+    freeze_tts_text_embedding: bool = False,
+) -> Optional[List[str]]:
     if value is None:
-        return list(DEFAULT_MODULES_TO_SAVE)
+        return list(_default_modules_to_save(use_tts_text_embedding, freeze_tts_text_embedding))
     items = [item.strip() for item in value.split(",") if item.strip()]
     if not items or items == ["none"]:
         return None
@@ -71,7 +88,11 @@ def build_lora_config(args) -> LoraConfig:
         lora_dropout=args.lora_dropout,
         bias=args.lora_bias,
         target_modules=args.lora_target_regex,
-        modules_to_save=parse_modules_to_save(args.lora_modules_to_save),
+        modules_to_save=parse_modules_to_save(
+            args.lora_modules_to_save,
+            use_tts_text_embedding=args.use_tts_text_embedding,
+            freeze_tts_text_embedding=args.freeze_tts_text_embedding,
+        ),
         task_type=None,
     )
 
@@ -199,6 +220,20 @@ def train():
     parser.add_argument("--dtype", type=str, default="bfloat16", choices=["auto", "bfloat16", "float16", "float32"])
     parser.add_argument("--attn_implementation", type=str, default="flash_attention_2")
     parser.add_argument("--use_acoustic_codebooks", action="store_true")
+    parser.add_argument(
+        "--use_tts_text_embedding",
+        action="store_true",
+        help=(
+            "Use the TTS Talker's text_embedding+text_projection instead of the "
+            "Qwen3-derived asr_text_embedding. When set, modules_to_save defaults to "
+            "text_embedding,text_projection,text_head (or text_head only if --freeze_tts_text_embedding)."
+        ),
+    )
+    parser.add_argument(
+        "--freeze_tts_text_embedding",
+        action="store_true",
+        help="Freeze text_embedding and text_projection when --use_tts_text_embedding is set.",
+    )
     parser.add_argument("--min_duration", type=float, default=None)
     parser.add_argument("--max_duration", type=float, default=None)
     parser.add_argument("--min_dnsmos", type=float, default=None)
@@ -228,8 +263,12 @@ def train():
     parser.add_argument(
         "--lora_modules_to_save",
         type=str,
-        default=",".join(DEFAULT_MODULES_TO_SAVE),
-        help="Comma-separated module name suffixes kept fully trainable. Set to 'none' to LoRA them too.",
+        default=None,
+        help=(
+            "Comma-separated module name suffixes kept fully trainable. "
+            "Auto-determined from --use_tts_text_embedding / --freeze_tts_text_embedding when omitted. "
+            "Set to 'none' to skip modules_to_save entirely."
+        ),
     )
     args = parser.parse_args()
 
@@ -283,7 +322,14 @@ def train():
         asr_bos_token_id=special_token_ids.bos_token_id,
         asr_eos_token_id=special_token_ids.eos_token_id,
         asr_pad_token_id=special_token_ids.pad_token_id,
+        use_tts_text_embedding=args.use_tts_text_embedding,
+        freeze_tts_text_embedding=args.freeze_tts_text_embedding,
     )
+    if args.use_tts_text_embedding:
+        accelerator.print(
+            f"Using TTS text_embedding+text_projection "
+            f"({'frozen' if args.freeze_tts_text_embedding else 'trainable'})"
+        )
     load_info = asr_model.load_qwen3_text_weights(
         args.qwen3_model_path,
         torch_dtype=dtype,
@@ -501,6 +547,8 @@ def save_checkpoint(accelerator: Accelerator, model, output_dir: str, name: str,
         "init_tts_model_path": args.init_tts_model_path,
         "qwen3_model_path": args.qwen3_model_path,
         "use_acoustic_codebooks": args.use_acoustic_codebooks,
+        "use_tts_text_embedding": args.use_tts_text_embedding,
+        "freeze_tts_text_embedding": args.freeze_tts_text_embedding,
         "eval_data_lst": args.eval_data_lst,
         "max_batch_tokens": args.max_batch_tokens,
         "eval_max_batch_tokens": args.eval_max_batch_tokens,

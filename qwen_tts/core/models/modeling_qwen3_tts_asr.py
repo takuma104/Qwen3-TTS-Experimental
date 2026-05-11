@@ -41,10 +41,17 @@ class Qwen3TTSForSpeechRecognition(nn.Module):
     """
     Thin ASR wrapper around the Qwen3-TTS Talker.
 
-    The wrapper keeps the Qwen3-TTS Talker body and adds a 1024-dimensional
-    Qwen3-style text embedding/head pair for semantic-code-to-text training.
-    It intentionally does not reuse the TTS text embedding because the TTS text
-    path is 2048-dimensional and projected into the Talker hidden size.
+    Two text-embedding paths are supported for the decoder input:
+
+    * ``use_tts_text_embedding=False`` (default): adds a new
+      ``asr_text_embedding`` (shape ``[vocab, hidden]``) initialized from
+      Qwen3-0.6B ``embed_tokens``.  This keeps the TTS side untouched.
+
+    * ``use_tts_text_embedding=True``: reuses the TTS Talker's existing
+      ``text_embedding`` (2048-dim) + ``text_projection`` (2048→1024 MLP)
+      that were jointly trained with the Talker body during TTS pre-training.
+      When ``freeze_tts_text_embedding=True`` those weights are frozen;
+      otherwise they remain trainable.
     """
 
     def __init__(
@@ -55,12 +62,15 @@ class Qwen3TTSForSpeechRecognition(nn.Module):
         asr_bos_token_id: Optional[int] = None,
         asr_eos_token_id: Optional[int] = None,
         asr_pad_token_id: Optional[int] = None,
+        use_tts_text_embedding: bool = False,
+        freeze_tts_text_embedding: bool = False,
     ):
         super().__init__()
         self.tts_model = tts_model
         self.config = tts_model.config
         self.talker_config = tts_model.config.talker_config
         self.use_acoustic_codebooks = use_acoustic_codebooks
+        self.use_tts_text_embedding = use_tts_text_embedding
 
         self.hidden_size = self.talker_config.hidden_size
         self.text_vocab_size = text_vocab_size or self.talker_config.text_vocab_size
@@ -69,10 +79,20 @@ class Qwen3TTSForSpeechRecognition(nn.Module):
         self.asr_eos_token_id = asr_eos_token_id or getattr(self.config, "im_end_token_id", None)
         self.asr_pad_token_id = asr_pad_token_id
 
-        self.asr_text_embedding = nn.Embedding(self.text_vocab_size, self.hidden_size)
-        self.text_head = nn.Linear(self.hidden_size, self.text_vocab_size, bias=False)
         talker_parameter = next(self.talker.parameters())
-        self.asr_text_embedding.to(device=talker_parameter.device, dtype=talker_parameter.dtype)
+
+        if not use_tts_text_embedding:
+            self.asr_text_embedding = nn.Embedding(self.text_vocab_size, self.hidden_size)
+            self.asr_text_embedding.to(device=talker_parameter.device, dtype=talker_parameter.dtype)
+        else:
+            self.asr_text_embedding = None
+            if freeze_tts_text_embedding:
+                for p in self.talker.model.text_embedding.parameters():
+                    p.requires_grad = False
+                for p in self.talker.text_projection.parameters():
+                    p.requires_grad = False
+
+        self.text_head = nn.Linear(self.hidden_size, self.text_vocab_size, bias=False)
         self.text_head.to(device=talker_parameter.device, dtype=talker_parameter.dtype)
 
     @property
@@ -104,6 +124,8 @@ class Qwen3TTSForSpeechRecognition(nn.Module):
                 parameter.requires_grad = False
 
     def tie_text_weights(self):
+        if self.use_tts_text_embedding:
+            return
         self.text_head.weight = self.asr_text_embedding.weight
 
     @torch.no_grad()
@@ -115,46 +137,57 @@ class Qwen3TTSForSpeechRecognition(nn.Module):
         **from_pretrained_kwargs,
     ) -> Qwen3TTSASRLoadInfo:
         """
-        Initialize ASR text embedding/head from a Qwen3 CausalLM checkpoint.
+        Initialize ASR text head (and embedding when not using TTS path) from a
+        Qwen3 CausalLM checkpoint.
 
-        Qwen3-0.6B usually ties `lm_head.weight` to
-        `model.embed_tokens.weight`. If `lm_head.weight` is absent from the
-        checkpoint state dict, the embedding weight is used as the head fallback.
+        When ``use_tts_text_embedding=True`` only ``text_head`` is loaded;
+        ``asr_text_embedding`` is skipped because the TTS ``text_embedding +
+        text_projection`` path is used instead.
+
+        Qwen3-0.6B usually ties ``lm_head.weight`` to
+        ``model.embed_tokens.weight``.  If ``lm_head.weight`` is absent the
+        embedding weight is used as a fallback for ``text_head``.
         """
         qwen3 = AutoModelForCausalLM.from_pretrained(qwen3_model_name_or_path, **from_pretrained_kwargs)
         state_dict = qwen3.state_dict()
 
         embedding_key = "model.embed_tokens.weight"
-        if embedding_key not in state_dict:
-            raise KeyError(f"{embedding_key} not found in Qwen3 checkpoint")
+        embedding_weight = state_dict.get(embedding_key)
 
-        embedding_weight = state_dict[embedding_key]
-        expected_embedding_shape = self.asr_text_embedding.weight.shape
-        if embedding_weight.shape != expected_embedding_shape:
-            raise ValueError(
-                f"Qwen3 text embedding shape {tuple(embedding_weight.shape)} does not match "
-                f"ASR embedding shape {tuple(expected_embedding_shape)}"
-            )
-
-        self.asr_text_embedding.weight.copy_(embedding_weight.to(self.asr_text_embedding.weight.device))
+        if not self.use_tts_text_embedding:
+            if embedding_weight is None:
+                raise KeyError(f"{embedding_key} not found in Qwen3 checkpoint")
+            expected_embedding_shape = self.asr_text_embedding.weight.shape
+            if embedding_weight.shape != expected_embedding_shape:
+                raise ValueError(
+                    f"Qwen3 text embedding shape {tuple(embedding_weight.shape)} does not match "
+                    f"ASR embedding shape {tuple(expected_embedding_shape)}"
+                )
+            self.asr_text_embedding.weight.copy_(embedding_weight.to(self.asr_text_embedding.weight.device))
 
         head_key = "lm_head.weight"
-        head_weight = state_dict.get(head_key, embedding_weight)
+        head_weight = state_dict.get(head_key)
+        if head_weight is None:
+            if embedding_weight is None:
+                raise KeyError(f"Neither {head_key} nor {embedding_key} found in Qwen3 checkpoint")
+            head_weight = embedding_weight
+            head_key = embedding_key
+
         expected_head_shape = self.text_head.weight.shape
         if head_weight.shape != expected_head_shape:
             raise ValueError(
                 f"Qwen3 text head shape {tuple(head_weight.shape)} does not match "
                 f"ASR text head shape {tuple(expected_head_shape)}"
             )
-
         self.text_head.weight.copy_(head_weight.to(self.text_head.weight.device))
-        if tie_text_weights:
+
+        if tie_text_weights and not self.use_tts_text_embedding:
             self.tie_text_weights()
 
         del qwen3
         return Qwen3TTSASRLoadInfo(
-            text_embedding_key=embedding_key,
-            text_head_key=head_key if head_key in state_dict else embedding_key,
+            text_embedding_key="tts_text_embedding+text_projection" if self.use_tts_text_embedding else embedding_key,
+            text_head_key=head_key,
         )
 
     def _normalize_audio_codes(self, audio_codes: torch.Tensor) -> torch.Tensor:
@@ -186,7 +219,11 @@ class Qwen3TTSForSpeechRecognition(nn.Module):
         decoder_input_ids: torch.Tensor,
     ) -> torch.Tensor:
         speech_embeddings = self.build_speech_embeddings(audio_codes)
-        text_embeddings = self.asr_text_embedding(decoder_input_ids.long())
+        ids = decoder_input_ids.long()
+        if self.use_tts_text_embedding:
+            text_embeddings = self.talker.text_projection(self.talker.get_text_embeddings()(ids))
+        else:
+            text_embeddings = self.asr_text_embedding(ids)
         return torch.cat([speech_embeddings, text_embeddings], dim=1)
 
     def forward(
