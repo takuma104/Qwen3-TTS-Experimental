@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 import torch
 from asr_dataset import Qwen3TTSASRWebDataset, resolve_asr_special_token_ids
+from peft import PeftModel
 from qwen_tts.core.models.modeling_qwen3_tts_asr import Qwen3TTSForSpeechRecognition
 from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
 from safetensors.torch import load_file
@@ -74,6 +75,10 @@ def main():
     parser.add_argument("--checkpoint_dir", type=str, required=True)
     parser.add_argument("--data_lst", type=str, required=True)
     parser.add_argument("--init_tts_model_path", type=str, default=None)
+    parser.add_argument("--qwen3_model_path", type=str, default=None,
+                        help="Qwen3 text model path for loading asr_text_embedding/text_head. "
+                             "Required for LoRA checkpoints trained with --lora_modules_to_save none. "
+                             "Falls back to qwen3_model_path in asr_training_config.json.")
     parser.add_argument("--output_jsonl", type=str, default=None)
     parser.add_argument("--max_new_tokens", type=int, default=256)
     parser.add_argument("--dtype", type=str, default="bfloat16", choices=["auto", "bfloat16", "float16", "float32"])
@@ -84,9 +89,12 @@ def main():
     args = parser.parse_args()
 
     checkpoint_dir = Path(args.checkpoint_dir)
-    checkpoint_path = checkpoint_dir / "asr_model.safetensors"
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Checkpoint weights not found: {checkpoint_path}")
+    is_lora = (checkpoint_dir / "adapter_config.json").exists()
+
+    if not is_lora:
+        checkpoint_path = checkpoint_dir / "asr_model.safetensors"
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint weights not found: {checkpoint_path}")
 
     training_config = load_training_config(checkpoint_dir)
     init_tts_model_path = choose_arg(
@@ -115,10 +123,24 @@ def main():
         asr_pad_token_id=special_token_ids.pad_token_id,
     )
 
-    state_dict = load_file(str(checkpoint_path), device="cpu")
-    load_result = asr_model.load_state_dict(state_dict, strict=True)
-    print(f"Loaded checkpoint: {checkpoint_path}")
-    print(f"Loaded state dict: missing={load_result.missing_keys} unexpected={load_result.unexpected_keys}")
+    if is_lora:
+        qwen3_model_path = args.qwen3_model_path or training_config.get("qwen3_model_path")
+        if qwen3_model_path:
+            load_info = asr_model.load_qwen3_text_weights(qwen3_model_path, torch_dtype=dtype)
+            print(f"Loaded Qwen3 text weights from {qwen3_model_path}: {load_info}")
+        else:
+            print(
+                "WARNING: qwen3_model_path not specified and not found in training config. "
+                "asr_text_embedding and text_head will use TTS-side initialization, "
+                "which is incorrect if they were not saved in the LoRA adapter (modules_to_save=None)."
+            )
+        asr_model = PeftModel.from_pretrained(asr_model, str(checkpoint_dir))
+        print(f"Loaded LoRA checkpoint: {checkpoint_dir}")
+    else:
+        state_dict = load_file(str(checkpoint_path), device="cpu")
+        load_result = asr_model.load_state_dict(state_dict, strict=True)
+        print(f"Loaded checkpoint: {checkpoint_path}")
+        print(f"Loaded state dict: missing={load_result.missing_keys} unexpected={load_result.unexpected_keys}")
     print(
         "Resolved ASR special tokens: "
         f"bos={special_token_ids.bos_token_id} "
